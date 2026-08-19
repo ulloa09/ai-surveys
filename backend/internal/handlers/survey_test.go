@@ -1,0 +1,218 @@
+package handlers_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/ulloa09/ai-surveys/backend/internal/handlers"
+	"github.com/ulloa09/ai-surveys/backend/internal/middleware"
+	"github.com/ulloa09/ai-surveys/backend/internal/models"
+	"github.com/ulloa09/ai-surveys/backend/internal/services"
+)
+
+// --- mock SurveyServicer ---
+
+type fakeSurveySvc struct {
+	createFn    func(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error)
+	listFn      func(ctx context.Context, user *models.User) ([]models.Survey, error)
+	getFn       func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	updateFn    func(ctx context.Context, user *models.User, id string, in services.UpdateSurveyInput) (*models.Survey, error)
+	deleteFn    func(ctx context.Context, user *models.User, id string) error
+	duplicateFn func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+}
+
+func (f *fakeSurveySvc) Create(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
+	return f.createFn(ctx, user, in)
+}
+func (f *fakeSurveySvc) List(ctx context.Context, user *models.User) ([]models.Survey, error) {
+	return f.listFn(ctx, user)
+}
+func (f *fakeSurveySvc) Get(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.getFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) Update(ctx context.Context, user *models.User, id string, in services.UpdateSurveyInput) (*models.Survey, error) {
+	return f.updateFn(ctx, user, id, in)
+}
+func (f *fakeSurveySvc) Delete(ctx context.Context, user *models.User, id string) error {
+	return f.deleteFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) Duplicate(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.duplicateFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) CheckWriteAccess(ctx context.Context, user *models.User, surveyID string) error {
+	return nil
+}
+
+// ensure fakeSurveySvc satisfies handlers.SurveyServicer at compile time
+var _ handlers.SurveyServicer = (*fakeSurveySvc)(nil)
+
+const testSurveyID = "11111111-1111-1111-1111-111111111111"
+const testTeamID = "22222222-2222-2222-2222-222222222222"
+
+// serveAuthed corre el handler envuelto en Authenticate para inyectar un
+// usuario en el contexto, agregando opcionalmente parámetros de ruta de chi.
+func serveAuthed(handler http.Handler, req *http.Request, user *models.User, params map[string]string) *httptest.ResponseRecorder {
+	if len(params) > 0 {
+		rctx := chi.NewRouteContext()
+		for k, v := range params {
+			rctx.URLParams.Add(k, v)
+		}
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	}
+	req.AddCookie(&http.Cookie{Name: "session", Value: "tok"})
+
+	rec := httptest.NewRecorder()
+	middleware.Authenticate(&fakeSessionValidator{user: user})(handler).ServeHTTP(rec, req)
+	return rec
+}
+
+func adminUser() *models.User {
+	return &models.User{ID: "u1", Role: "admin"}
+}
+
+// --- CreateSurvey ---
+
+func TestCreateSurveyHandler_Created(t *testing.T) {
+	svc := &fakeSurveySvc{
+		createFn: func(_ context.Context, _ *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
+			return &models.Survey{ID: "s1", Title: in.Title, Status: "draft"}, nil
+		},
+	}
+	body := `{"title":"Encuesta semana 12","team_id":"` + testTeamID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body: %s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	var got models.Survey
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Title != "Encuesta semana 12" {
+		t.Errorf("title = %q, want %q", got.Title, "Encuesta semana 12")
+	}
+}
+
+func TestCreateSurveyHandler_MissingTitle(t *testing.T) {
+	svc := &fakeSurveySvc{}
+	body := `{"team_id":"` + testTeamID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateSurveyHandler_InvalidTeamID(t *testing.T) {
+	svc := &fakeSurveySvc{}
+	body := `{"title":"x","team_id":"not-a-uuid"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateSurveyHandler_InvalidAnonymityLevel(t *testing.T) {
+	svc := &fakeSurveySvc{}
+	body := `{"title":"x","team_id":"` + testTeamID + `","anonymity_level":"bogus"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+// --- ListSurveys ---
+
+func TestListSurveysHandler_EmptyReturnsArray(t *testing.T) {
+	svc := &fakeSurveySvc{
+		listFn: func(_ context.Context, _ *models.User) ([]models.Survey, error) { return nil, nil },
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/surveys", nil)
+	rr := serveAuthed(handlers.ListSurveys(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if strings.TrimSpace(rr.Body.String()) != "[]" {
+		t.Errorf("body = %q, want []", rr.Body.String())
+	}
+}
+
+// --- UpdateSurvey ---
+
+func TestUpdateSurveyHandler_AnonymityLocked(t *testing.T) {
+	svc := &fakeSurveySvc{
+		updateFn: func(_ context.Context, _ *models.User, _ string, _ services.UpdateSurveyInput) (*models.Survey, error) {
+			return nil, services.ErrAnonymityLocked
+		},
+	}
+	body := `{"anonymity_level":"full"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/surveys/"+testSurveyID, strings.NewReader(body))
+	rr := serveAuthed(handlers.UpdateSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body: %s)", rr.Code, http.StatusConflict, rr.Body.String())
+	}
+}
+
+func TestUpdateSurveyHandler_EmptyTitleRejected(t *testing.T) {
+	svc := &fakeSurveySvc{}
+	body := `{"title":""}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/surveys/"+testSurveyID, strings.NewReader(body))
+	rr := serveAuthed(handlers.UpdateSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+// --- DeleteSurvey ---
+
+func TestDeleteSurveyHandler_ConflictWhenResponsesExist(t *testing.T) {
+	svc := &fakeSurveySvc{
+		deleteFn: func(_ context.Context, _ *models.User, _ string) error {
+			return services.ErrSurveyHasResponses
+		},
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/surveys/"+testSurveyID, nil)
+	rr := serveAuthed(handlers.DeleteSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusConflict)
+	}
+}
+
+// --- DuplicateSurvey ---
+
+func TestDuplicateSurveyHandler_Created(t *testing.T) {
+	svc := &fakeSurveySvc{
+		duplicateFn: func(_ context.Context, _ *models.User, _ string) (*models.Survey, error) {
+			return &models.Survey{ID: "s2", Title: "Original (copia)", Status: "draft"}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/duplicate", nil)
+	rr := serveAuthed(handlers.DuplicateSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusCreated)
+	}
+	var got models.Survey
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.HasSuffix(got.Title, "(copia)") {
+		t.Errorf("title = %q, want suffix (copia)", got.Title)
+	}
+}

@@ -32,6 +32,7 @@ func main() {
 
 	authSvc := services.NewAuthService(pool, cfg.Auth)
 	teamSvc := services.NewTeamService(pool)
+	surveySvc := services.NewSurveyService(pool)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -67,6 +68,16 @@ func main() {
 			// futuro, acceso de Admin y Profesor limitado solo a sus propios
 			// equipos; Alumno queda excluido explicitamente aunque sea miembro.
 			r.With(appmw.RequireRole("admin", "profesor")).Get("/analytics", handlers.NotImplemented("team_analytics"))
+		})
+
+		// Surveys
+		r.Route("/api/surveys", func(r chi.Router) {
+			r.With(appmw.RequireRole("admin")).Post("/", handlers.CreateSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/", handlers.ListSurveys(surveySvc))
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}", handlers.GetSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin")).Patch("/{id}", handlers.UpdateSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin")).Delete("/{id}", handlers.DeleteSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin")).Post("/{id}/duplicate", handlers.DuplicateSurvey(surveySvc))
 		})
 	})
 
