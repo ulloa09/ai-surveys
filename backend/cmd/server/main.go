@@ -31,6 +31,7 @@ func main() {
 	}
 
 	authSvc := services.NewAuthService(pool, cfg.Auth)
+	teamSvc := services.NewTeamService(pool)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -48,6 +49,25 @@ func main() {
 		r.Use(appmw.Authenticate(authSvc))
 
 		r.Get("/api/admin/me", handlers.Me())
+
+		// Teams — reutilizado como concepto de grupo/clase (Fase 3, RBAC).
+		// Crear equipos y ver el listado global quedan en RequireAdminRole /
+		// bypass de RequireTeamMember (admin y super_admin, ver Rbac.go).
+		r.With(appmw.RequireAdminRole()).Post("/api/admin/teams", handlers.CreateTeam(teamSvc))
+		r.Get("/api/admin/teams", handlers.ListTeams(teamSvc))
+
+		r.Route("/api/admin/teams/{teamID}", func(r chi.Router) {
+			r.Use(appmw.RequireTeamMember(teamSvc))
+			r.Get("/", handlers.GetTeam(teamSvc))
+			r.With(appmw.RequireAdminRole()).Post("/members", handlers.AddMember(teamSvc))
+			r.With(appmw.RequireAdminRole()).Delete("/members/{userID}", handlers.RemoveMember(teamSvc))
+			r.With(appmw.RequireAdminRole()).Post("/members/{userID}/move", handlers.MoveMember(teamSvc))
+
+			// Placeholder (Fase 3): estadisticas/insights de IA del equipo — a
+			// futuro, acceso de Admin y Profesor limitado solo a sus propios
+			// equipos; Alumno queda excluido explicitamente aunque sea miembro.
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/analytics", handlers.NotImplemented("team_analytics"))
+		})
 	})
 
 	log.Printf("backend corriendo en :%s\n", cfg.Port)
