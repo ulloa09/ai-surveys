@@ -95,7 +95,7 @@ func TestCreateSurveyHandler_Created(t *testing.T) {
 			return &models.Survey{ID: "s1", Title: in.Title, Status: "draft"}, nil
 		},
 	}
-	body := `{"title":"Encuesta semana 12","team_id":"` + testTeamID + `"}`
+	body := `{"title":"Encuesta semana 12","team_id":"` + testTeamID + `","system_prompt":"Sondea la experiencia del semestre."}`
 	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
 	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
 
@@ -136,6 +136,82 @@ func TestCreateSurveyHandler_InvalidTeamID(t *testing.T) {
 func TestCreateSurveyHandler_InvalidAnonymityLevel(t *testing.T) {
 	svc := &fakeSurveySvc{}
 	body := `{"title":"x","team_id":"` + testTeamID + `","anonymity_level":"bogus"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateSurveyHandler_DefaultsToConversationalMode(t *testing.T) {
+	// Rubrica: la creación de encuestas por defecto usa Mode C (conversational)
+	// y termination turn_limit con límite de 12.
+	svc := &fakeSurveySvc{
+		createFn: func(_ context.Context, _ *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
+			if in.Mode != "conversational" {
+				t.Errorf("mode = %q, want conversational", in.Mode)
+			}
+			if in.TerminationMode != "turn_limit" {
+				t.Errorf("termination_mode = %q, want turn_limit", in.TerminationMode)
+			}
+			if in.TurnLimit == nil || *in.TurnLimit != 12 {
+				t.Errorf("turn_limit = %v, want 12", in.TurnLimit)
+			}
+			return &models.Survey{ID: "s1", Title: in.Title, Mode: in.Mode, Status: "draft"}, nil
+		},
+	}
+	body := `{"title":"x","team_id":"` + testTeamID + `","system_prompt":"Sé breve y directo."}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body: %s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+}
+
+func TestCreateSurveyHandler_SystemPromptRequiredForConversational(t *testing.T) {
+	// Rubrica: system prompt es requerido para Mode B y C, opcional para Mode A.
+	svc := &fakeSurveySvc{}
+	body := `{"title":"x","team_id":"` + testTeamID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateSurveyHandler_FormModeDoesNotRequireSystemPrompt(t *testing.T) {
+	// Rubrica: Mode A (form, preguntas fijas) no requiere system prompt.
+	svc := &fakeSurveySvc{
+		createFn: func(_ context.Context, _ *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
+			return &models.Survey{ID: "s1", Title: in.Title, Mode: in.Mode, Status: "draft"}, nil
+		},
+	}
+	body := `{"title":"x","team_id":"` + testTeamID + `","mode":"form"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body: %s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+}
+
+func TestCreateSurveyHandler_InvalidTerminationMode(t *testing.T) {
+	svc := &fakeSurveySvc{}
+	body := `{"title":"x","team_id":"` + testTeamID + `","mode":"form","termination_mode":"bogus"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
+	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateSurveyHandler_TimeEstimateRequiresMinutes(t *testing.T) {
+	svc := &fakeSurveySvc{}
+	body := `{"title":"x","team_id":"` + testTeamID + `","mode":"form","termination_mode":"time_estimate"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/surveys", strings.NewReader(body))
 	rr := serveAuthed(handlers.CreateSurvey(svc), req, adminUser(), nil)
 

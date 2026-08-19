@@ -39,7 +39,12 @@ export const actions: Actions = {
 			team_id: teamId,
 			anonymity_level: String(form.get('anonymity_level') ?? 'none'),
 			allow_revisit: form.get('allow_revisit') === 'on',
-			optional_registration: form.get('optional_registration') === 'on'
+			optional_registration: form.get('optional_registration') === 'on',
+			// Este formulario rápido no ofrece selector de modo (#06) — crea en
+			// Mode A (form, preguntas fijas), el único que no exige system_prompt.
+			// El modo se puede cambiar después desde el panel de configuración
+			// de la encuesta.
+			mode: 'form'
 		};
 
 		const res = await apiFetch('/api/surveys', token, {

@@ -21,19 +21,35 @@ var (
 // ValidAnonymityLevels contiene los valores que acepta la columna anonymity_level.
 var ValidAnonymityLevels = map[string]bool{"none": true, "partial": true, "full": true}
 
+// ValidModes contiene los modos de encuesta soportados.
+// conversational = Mode C (híbrido, recomendado), form = Mode A (preguntas fijas), prompt_only = Mode B.
+var ValidModes = map[string]bool{"conversational": true, "form": true, "prompt_only": true}
+
+// ValidTerminationModes contiene los modos de terminación soportados.
+var ValidTerminationModes = map[string]bool{
+	"turn_limit":        true,
+	"question_coverage": true,
+	"time_estimate":     true,
+	"combination":       true,
+}
+
 // surveyColumns define las columnas que se seleccionan en cada consulta.
 // Centralizar esto garantiza que List y Get escaneen siempre el mismo orden.
 const surveyColumns = `
 	s.id::text, s.title, s.description, s.owner_id::text, u.display_name,
 	s.team_id::text, t.name,
-	s.status, s.anonymity_level, s.allow_revisit, s.optional_registration,
+	s.status, s.mode, s.system_prompt, s.anonymity_level,
+	s.allow_revisit, s.optional_registration,
+	s.termination_mode, s.turn_limit, s.time_estimate_minutes,
 	s.created_at, s.updated_at`
 
 // returningColumns es el bloque RETURNING que usan Create, Update y Duplicate.
 // No incluye owner_name/team_name (vienen de un JOIN) — se rellenan aparte.
 const returningColumns = `
 	RETURNING id::text, title, description, owner_id::text, team_id::text,
-	          status, anonymity_level, allow_revisit, optional_registration,
+	          status, mode, system_prompt, anonymity_level,
+	          allow_revisit, optional_registration,
+	          termination_mode, turn_limit, time_estimate_minutes,
 	          created_at, updated_at`
 
 // QuestionCopier es lo único que SurveyService necesita de QuestionService.
@@ -60,6 +76,11 @@ type CreateSurveyInput struct {
 	AnonymityLevel       string
 	AllowRevisit         bool
 	OptionalRegistration bool
+	Mode                 string
+	SystemPrompt         *string
+	TerminationMode      string
+	TurnLimit            *int
+	TimeEstimateMinutes  *int
 }
 
 // UpdateSurveyInput usa punteros para distinguir un campo no enviado (nil) de
@@ -70,6 +91,11 @@ type UpdateSurveyInput struct {
 	AnonymityLevel       *string
 	AllowRevisit         *bool
 	OptionalRegistration *bool
+	Mode                 *string
+	SystemPrompt         *string
+	TerminationMode      *string
+	TurnLimit            *int
+	TimeEstimateMinutes  *int
 }
 
 // Create inserta una encuesta nueva en estado draft. Solo admin/super_admin
@@ -83,12 +109,16 @@ func (s *SurveyService) Create(ctx context.Context, user *models.User, in Create
 
 	var survey models.Survey
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration,
+		                      mode, system_prompt, termination_mode, turn_limit, time_estimate_minutes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		`+returningColumns,
 		in.Title, in.Description, user.ID, in.TeamID, in.AnonymityLevel, in.AllowRevisit, in.OptionalRegistration,
+		in.Mode, in.SystemPrompt, in.TerminationMode, in.TurnLimit, in.TimeEstimateMinutes,
 	).Scan(&survey.ID, &survey.Title, &survey.Description, &survey.OwnerID, &survey.TeamID,
-		&survey.Status, &survey.AnonymityLevel, &survey.AllowRevisit, &survey.OptionalRegistration,
+		&survey.Status, &survey.Mode, &survey.SystemPrompt, &survey.AnonymityLevel,
+		&survey.AllowRevisit, &survey.OptionalRegistration,
+		&survey.TerminationMode, &survey.TurnLimit, &survey.TimeEstimateMinutes,
 		&survey.CreatedAt, &survey.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -183,13 +213,36 @@ func (s *SurveyService) Update(ctx context.Context, user *models.User, id string
 	if in.OptionalRegistration != nil {
 		optionalRegistration = *in.OptionalRegistration
 	}
+	mode := survey.Mode
+	if in.Mode != nil {
+		mode = *in.Mode
+	}
+	systemPrompt := survey.SystemPrompt
+	if in.SystemPrompt != nil {
+		systemPrompt = in.SystemPrompt
+	}
+	terminationMode := survey.TerminationMode
+	if in.TerminationMode != nil {
+		terminationMode = *in.TerminationMode
+	}
+	turnLimit := survey.TurnLimit
+	if in.TurnLimit != nil {
+		turnLimit = in.TurnLimit
+	}
+	timeEstimateMinutes := survey.TimeEstimateMinutes
+	if in.TimeEstimateMinutes != nil {
+		timeEstimateMinutes = in.TimeEstimateMinutes
+	}
 
 	_, err = s.db.Exec(ctx, `
 		UPDATE surveys
 		SET title = $1, description = $2, anonymity_level = $3,
-		    allow_revisit = $4, optional_registration = $5, updated_at = NOW()
-		WHERE id = $6`,
-		title, description, anonymityLevel, allowRevisit, optionalRegistration, id,
+		    allow_revisit = $4, optional_registration = $5,
+		    mode = $6, system_prompt = $7, termination_mode = $8,
+		    turn_limit = $9, time_estimate_minutes = $10, updated_at = NOW()
+		WHERE id = $11`,
+		title, description, anonymityLevel, allowRevisit, optionalRegistration,
+		mode, systemPrompt, terminationMode, turnLimit, timeEstimateMinutes, id,
 	)
 	if err != nil {
 		return nil, err
@@ -241,11 +294,13 @@ func (s *SurveyService) Duplicate(ctx context.Context, user *models.User, id str
 
 	var newID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration,
+		                      mode, system_prompt, termination_mode, turn_limit, time_estimate_minutes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id::text`,
 		survey.Title+" (copia)", survey.Description, user.ID, survey.TeamID,
 		survey.AnonymityLevel, survey.AllowRevisit, survey.OptionalRegistration,
+		survey.Mode, survey.SystemPrompt, survey.TerminationMode, survey.TurnLimit, survey.TimeEstimateMinutes,
 	).Scan(&newID)
 	if err != nil {
 		return nil, err
@@ -357,7 +412,9 @@ func scanSurvey(row pgx.Row) (*models.Survey, error) {
 	err := row.Scan(
 		&s.ID, &s.Title, &s.Description, &s.OwnerID, &s.OwnerName,
 		&s.TeamID, &s.TeamName,
-		&s.Status, &s.AnonymityLevel, &s.AllowRevisit, &s.OptionalRegistration,
+		&s.Status, &s.Mode, &s.SystemPrompt, &s.AnonymityLevel,
+		&s.AllowRevisit, &s.OptionalRegistration,
+		&s.TerminationMode, &s.TurnLimit, &s.TimeEstimateMinutes,
 		&s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {

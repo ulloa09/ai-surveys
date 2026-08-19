@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	appmw "github.com/ulloa09/ai-surveys/backend/internal/middleware"
 	"github.com/ulloa09/ai-surveys/backend/internal/models"
@@ -34,6 +35,11 @@ func CreateSurvey(svc SurveyServicer) http.HandlerFunc {
 			AnonymityLevel       string  `json:"anonymity_level"`
 			AllowRevisit         bool    `json:"allow_revisit"`
 			OptionalRegistration bool    `json:"optional_registration"`
+			Mode                 string  `json:"mode"`
+			SystemPrompt         *string `json:"system_prompt"`
+			TerminationMode      string  `json:"termination_mode"`
+			TurnLimit            *int    `json:"turn_limit"`
+			TimeEstimateMinutes  *int    `json:"time_estimate_minutes"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -58,6 +64,38 @@ func CreateSurvey(svc SurveyServicer) http.HandlerFunc {
 			return
 		}
 
+		// El modo por defecto es conversational (Mode C — hibrido recomendado).
+		if body.Mode == "" {
+			body.Mode = "conversational"
+		}
+		if !services.ValidModes[body.Mode] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be conversational, form, or prompt_only"})
+			return
+		}
+		// Mode B (prompt_only) y Mode C (conversational) necesitan un system
+		// prompt; Mode A (form, preguntas fijas) es el único donde es opcional.
+		if body.Mode != "form" && (body.SystemPrompt == nil || strings.TrimSpace(*body.SystemPrompt) == "") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "system_prompt is required for prompt_only and conversational modes"})
+			return
+		}
+
+		// El modo de terminación por defecto es turn_limit con 12 turnos.
+		if body.TerminationMode == "" {
+			body.TerminationMode = "turn_limit"
+		}
+		if !services.ValidTerminationModes[body.TerminationMode] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "termination_mode must be turn_limit, question_coverage, time_estimate, or combination"})
+			return
+		}
+		if (body.TerminationMode == "turn_limit" || body.TerminationMode == "combination") && body.TurnLimit == nil {
+			defaultTurnLimit := 12
+			body.TurnLimit = &defaultTurnLimit
+		}
+		if (body.TerminationMode == "time_estimate" || body.TerminationMode == "combination") && body.TimeEstimateMinutes == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "time_estimate_minutes is required for time_estimate and combination termination modes"})
+			return
+		}
+
 		user := appmw.UserFromContext(r.Context())
 		survey, err := svc.Create(r.Context(), user, services.CreateSurveyInput{
 			Title:                body.Title,
@@ -66,6 +104,11 @@ func CreateSurvey(svc SurveyServicer) http.HandlerFunc {
 			AnonymityLevel:       body.AnonymityLevel,
 			AllowRevisit:         body.AllowRevisit,
 			OptionalRegistration: body.OptionalRegistration,
+			Mode:                 body.Mode,
+			SystemPrompt:         body.SystemPrompt,
+			TerminationMode:      body.TerminationMode,
+			TurnLimit:            body.TurnLimit,
+			TimeEstimateMinutes:  body.TimeEstimateMinutes,
 		})
 		if err != nil {
 			writeSurveyError(w, err)
@@ -126,6 +169,11 @@ func UpdateSurvey(svc SurveyServicer) http.HandlerFunc {
 			AnonymityLevel       *string `json:"anonymity_level"`
 			AllowRevisit         *bool   `json:"allow_revisit"`
 			OptionalRegistration *bool   `json:"optional_registration"`
+			Mode                 *string `json:"mode"`
+			SystemPrompt         *string `json:"system_prompt"`
+			TerminationMode      *string `json:"termination_mode"`
+			TurnLimit            *int    `json:"turn_limit"`
+			TimeEstimateMinutes  *int    `json:"time_estimate_minutes"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -138,6 +186,19 @@ func UpdateSurvey(svc SurveyServicer) http.HandlerFunc {
 		}
 		if body.AnonymityLevel != nil && !services.ValidAnonymityLevels[*body.AnonymityLevel] {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "anonymity_level must be none, partial, or full"})
+			return
+		}
+		if body.Mode != nil && !services.ValidModes[*body.Mode] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be conversational, form, or prompt_only"})
+			return
+		}
+		if body.Mode != nil && *body.Mode != "form" &&
+			(body.SystemPrompt == nil || strings.TrimSpace(*body.SystemPrompt) == "") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "system_prompt is required for prompt_only and conversational modes"})
+			return
+		}
+		if body.TerminationMode != nil && !services.ValidTerminationModes[*body.TerminationMode] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "termination_mode must be turn_limit, question_coverage, time_estimate, or combination"})
 			return
 		}
 
@@ -153,6 +214,11 @@ func UpdateSurvey(svc SurveyServicer) http.HandlerFunc {
 			AnonymityLevel:       body.AnonymityLevel,
 			AllowRevisit:         body.AllowRevisit,
 			OptionalRegistration: body.OptionalRegistration,
+			Mode:                 body.Mode,
+			SystemPrompt:         body.SystemPrompt,
+			TerminationMode:      body.TerminationMode,
+			TurnLimit:            body.TurnLimit,
+			TimeEstimateMinutes:  body.TimeEstimateMinutes,
 		})
 		if err != nil {
 			writeSurveyError(w, err)

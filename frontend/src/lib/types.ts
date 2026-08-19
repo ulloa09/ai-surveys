@@ -46,12 +46,66 @@ export interface Survey {
 	team_id: string;
 	team_name?: string;
 	status: 'draft' | 'open' | 'closed' | 'archived';
+	mode: 'conversational' | 'form' | 'prompt_only';
+	system_prompt: string | null;
 	anonymity_level: 'none' | 'partial' | 'full';
 	allow_revisit: boolean;
 	optional_registration: boolean;
+	termination_mode: 'turn_limit' | 'question_coverage' | 'time_estimate' | 'combination';
+	turn_limit: number | null;
+	time_estimate_minutes: number | null;
 	created_at: string;
 	updated_at: string;
 }
+
+export const SURVEY_MODES: {
+	value: Survey['mode'];
+	label: string;
+	description: string;
+	example: string;
+}[] = [
+	{
+		value: 'form',
+		label: 'Preguntas fijas + seguimiento IA',
+		description: 'La IA hace tus preguntas en orden y puede profundizar 1-2 niveles en cada una.',
+		example: 'Ej: "¿Qué tan útil fue el taller?" → si responde "poco", la IA pregunta por qué antes de seguir.'
+	},
+	{
+		value: 'prompt_only',
+		label: 'Solo system prompt',
+		description: 'Escribes un system prompt y la IA conduce la conversación libremente.',
+		example: 'Ej: "Eres un entrevistador que explora la experiencia del alumno en el semestre..."'
+	},
+	{
+		value: 'conversational',
+		label: 'Híbrido (recomendado)',
+		description: 'Defines preguntas requeridas y un system prompt; la IA las cubre todas con libertad para adaptar el tono.',
+		example: 'Ej: preguntas fijas sobre el curso, más instrucciones de tono para sondear con empatía.'
+	}
+];
+
+export const TERMINATION_MODES: { value: Survey['termination_mode']; label: string; description: string }[] = [
+	{
+		value: 'turn_limit',
+		label: 'Límite de turnos',
+		description: 'La conversación termina tras un número máximo de intercambios (por defecto 12).'
+	},
+	{
+		value: 'question_coverage',
+		label: 'Cobertura de preguntas',
+		description: 'Termina cuando todas las preguntas requeridas fueron cubiertas.'
+	},
+	{
+		value: 'time_estimate',
+		label: 'Duración estimada',
+		description: 'Se muestra al respondiente una duración esperada; la IA ajusta el ritmo para cumplirla.'
+	},
+	{
+		value: 'combination',
+		label: 'Combinación',
+		description: 'Los tres criterios están activos a la vez; el primero en cumplirse termina la conversación.'
+	}
+];
 
 export const STATUS_LABELS: Record<Survey['status'], string> = {
 	draft: 'Borrador',
