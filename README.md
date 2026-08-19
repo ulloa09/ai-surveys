@@ -146,6 +146,18 @@ The app will be available at `http://localhost:5173` (frontend) and `http://loca
 
 Database migrations run automatically on backend startup.
 
+### Seeded users (local development only)
+
+Migration `backend/migrations/003_default_users.sql` seeds one account per role so you can log in without registering — this runs automatically on backend startup, so there's nothing to set up after pulling the repo. They share the password **`12345678`**:
+
+| Email                  | Role          |
+| ----------------------- | ------------- |
+| `superadmin@test.com`  | `super_admin` |
+| `admin@test.com`       | `admin`       |
+| `member@test.com`      | `viewer`      |
+
+> ⚠️ These are development-only credentials. Do **not** ship them to any shared or production environment.
+
 ---
 
 ## Documentation

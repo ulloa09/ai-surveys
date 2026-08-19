@@ -5,13 +5,18 @@
 // Esto hace que sea fácil ver qué vars necesita la app y testear con valores distintos.
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"strings"
+)
 
 // Config agrupa toda la configuración de la aplicación.
 // Se crea una sola vez en main.go y se pasa hacia abajo.
 type Config struct {
 	Port           string
 	DB             DBConfig
+	Auth           AuthConfig
 	FrontendOrigin string
 }
 
@@ -22,6 +27,13 @@ type DBConfig struct {
 	User     string
 	Password string
 	Name     string
+}
+
+// AuthConfig holds authentication-related configuration.
+type AuthConfig struct {
+	SuperAdminEmails []string // SUPER_ADMIN_EMAILS, comma-separated
+	SessionDurationH int      // SESSION_DURATION_HOURS
+	AppEnv           string   // APP_ENV: "development" | "production"
 }
 
 // DSN (Data Source Name) arma el string de conexión que pgx espera.
@@ -50,6 +62,11 @@ func Load() *Config {
 			Password: env("DB_PASSWORD", "postgres"),
 			Name:     env("DB_NAME", "appdb"),
 		},
+		Auth: AuthConfig{
+			SuperAdminEmails: parseCSV(env("SUPER_ADMIN_EMAILS", "")),
+			SessionDurationH: envInt("SESSION_DURATION_HOURS", 24),
+			AppEnv:           env("APP_ENV", "development"),
+		},
 		FrontendOrigin: env("FRONTEND_ORIGIN", "http://localhost:5173"),
 	}
 }
@@ -61,4 +78,27 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func parseCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

@@ -11,6 +11,8 @@ import (
 	"github.com/ulloa09/ai-surveys/backend/internal/config"
 	"github.com/ulloa09/ai-surveys/backend/internal/db"
 	"github.com/ulloa09/ai-surveys/backend/internal/handlers"
+	appmw "github.com/ulloa09/ai-surveys/backend/internal/middleware"
+	"github.com/ulloa09/ai-surveys/backend/internal/services"
 )
 
 func main() {
@@ -28,12 +30,25 @@ func main() {
 		log.Fatalf("error en migraciones: %v", err)
 	}
 
+	authSvc := services.NewAuthService(pool, cfg.Auth)
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.FrontendOrigin))
 
+	// ── Rutas públicas ────────────────────────────────────────────────────
 	r.Get("/api/health", handlers.Health(pool))
+	r.Post("/api/auth/register", handlers.Register(authSvc))
+	r.Post("/api/auth/login", handlers.Login(authSvc, cfg.Auth.AppEnv, cfg.Auth.SessionDurationH*3600))
+	r.Post("/api/auth/logout", handlers.Logout(authSvc))
+
+	// ── Rutas protegidas ─────────────────────────────────────────────────
+	r.Group(func(r chi.Router) {
+		r.Use(appmw.Authenticate(authSvc))
+
+		r.Get("/api/admin/me", handlers.Me())
+	})
 
 	log.Printf("backend corriendo en :%s\n", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
