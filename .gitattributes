@@ -1,0 +1,13 @@
+# Normaliza todos los archivos de texto a LF al hacer commit,
+# independientemente del sistema operativo del colaborador.
+* text=auto eol=lf
+
+# Binarios — git no debe tocar sus bytes.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.svg  binary
+*.woff binary
+*.woff2 binary

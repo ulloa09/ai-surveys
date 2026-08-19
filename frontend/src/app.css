@@ -1,0 +1,149 @@
+/* ─── Tipografía institucional ──────────────────────────────────────────── */
+/* Poppins para títulos y elementos de navegación, Inter para texto corrido.  */
+
+@font-face {
+  font-family: 'Poppins';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/poppins-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Poppins';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/poppins-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Poppins';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/poppins-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Poppins';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/poppins-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/inter-400-700.woff2') format('woff2');
+}
+
+/* ─── Design tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* Paleta de azules institucionales.
+     --blue-900 es el azul principal de marca; los demás son los tonos
+     usados para bandas, encabezados y enlaces. */
+  --blue-50:    #f0f3f7;
+  --blue-100:   #dde5ee;
+  --blue-200:   #c3d2e3;
+  --blue-300:   #8fb4d6;
+  --blue-400:   #5ba4d3;  /* banda azul claro (subnavegación) */
+  --blue-500:   #3d84b8;
+  --blue-600:   #1d5a8c;  /* enlaces sobre fondo claro */
+  --blue-700:   #143a66;  /* bandas y pie de página */
+  --blue-800:   #0e3059;
+  --blue-900:   #072b61;  /* azul del logotipo */
+
+  /* Acentos — la paleta evita violetas y cian; el acento es el azul claro. */
+  --sky-200:    #cfe3f2;
+  --sky-400:    var(--blue-400);
+  --indigo-300: var(--blue-300);
+  --indigo-400: var(--blue-500);
+  --violet-200: var(--blue-100);
+  --violet-400: var(--blue-500);
+
+  /* Semantic tokens */
+  --primary:       var(--blue-900);
+  --primary-hover: var(--blue-700);
+  --primary-lt:    var(--blue-100);
+  --accent:        var(--blue-400);
+  --accent-lt:     var(--blue-300);
+
+  /* Superficies */
+  --bg:      #eceef1;
+  --white:   #ffffff;
+  --text:    #26282b;
+  --muted:   #5b6167;
+  --border:  #d5dae1;
+
+  /* Estados */
+  --success:    #2e6b4f;
+  --success-lt: #e3efe9;
+  --warning:    #8a6116;
+  --warning-lt: #f7efdf;
+  --danger:     #9b2c2c;
+  --danger-lt:  #f6e6e6;
+
+  /* Alias heredados (mantienen las páginas existentes funcionando) */
+  --purple:    var(--blue-900);
+  --purple-lt: var(--blue-400);
+  --teal:      var(--blue-400);
+  --teal-dk:   var(--blue-700);
+  --green:     var(--success);
+  --mint:      var(--blue-300);
+
+  /* Sombras — discretas, sin tinte de color */
+  --shadow-sm: 0 1px 2px rgba(7,43,97,.06);
+  --shadow-md: 0 2px 8px rgba(7,43,97,.08);
+  --shadow-lg: 0 8px 28px rgba(7,43,97,.12);
+
+  /* Radios — la imagen institucional es de esquinas rectas o apenas suaves */
+  --radius-sm:   2px;
+  --radius-md:   4px;
+  --radius-lg:   6px;
+  --radius-xl:   8px;
+  --radius-pill: 100px;
+
+  /* Tipografía */
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Poppins', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+  /* Motivo de enlace del sitio institucional: anillo con flecha. Se usa como
+     máscara, así que el trazo del círculo forma parte de la figura. */
+  --ring-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.6'%3E%3Ccircle cx='12' cy='12' r='10.5'/%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M7 12h9M12.5 8.5 16 12l-3.5 3.5'/%3E%3C/g%3E%3C/svg%3E");
+
+  /* Retícula */
+  --container: 1200px;
+}
+
+/* ─── Reset & base ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Solo forma tipográfica: el color se deja a cada página. Un color global aquí
+   volvería invisibles los títulos que heredan el blanco de una banda azul. */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+button, input, textarea, select { font: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--blue-400);
+  outline-offset: 2px;
+}
+
+a { color: var(--blue-600); }

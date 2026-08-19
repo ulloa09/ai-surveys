@@ -1,0 +1,56 @@
+name: CI
+
+# Corre en cada push a cualquier rama y en cada pull request.
+# El objetivo es detectar errores antes de que lleguen a main.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ── Backend ────────────────────────────────────────────────────
+  # go vet detecta errores comunes que el compilador no reporta.
+  # go test corre todos los tests del módulo con detección de race conditions.
+  backend:
+    name: Backend — go vet + tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
+  # ── Frontend ───────────────────────────────────────────────────
+  # svelte-check verifica tipos TypeScript y errores de Svelte sin levantar el servidor.
+  # Es el equivalente a tsc --noEmit para proyectos SvelteKit.
+  frontend:
+    name: Frontend — type-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: svelte-check
+        run: npm run check
