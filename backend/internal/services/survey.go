@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,13 +36,20 @@ const returningColumns = `
 	          status, anonymity_level, allow_revisit, optional_registration,
 	          created_at, updated_at`
 
-// SurveyService maneja el CRUD y la duplicación de encuestas.
-type SurveyService struct {
-	db *pgxpool.Pool
+// QuestionCopier es lo único que SurveyService necesita de QuestionService.
+// Permite copiar las preguntas de una encuesta a otra dentro de una transacción.
+type QuestionCopier interface {
+	CopyQuestions(ctx context.Context, tx pgx.Tx, srcSurveyID, dstSurveyID string) error
 }
 
-func NewSurveyService(db *pgxpool.Pool) *SurveyService {
-	return &SurveyService{db: db}
+// SurveyService maneja el CRUD y la duplicación de encuestas.
+type SurveyService struct {
+	db        *pgxpool.Pool
+	questions QuestionCopier
+}
+
+func NewSurveyService(db *pgxpool.Pool, questions QuestionCopier) *SurveyService {
+	return &SurveyService{db: db, questions: questions}
 }
 
 // CreateSurveyInput agrupa los campos que el cliente puede enviar al crear una encuesta.
@@ -214,8 +222,8 @@ func (s *SurveyService) Delete(ctx context.Context, user *models.User, id string
 }
 
 // Duplicate crea una copia en draft con " (copia)" en el título, sin
-// respuestas. Las preguntas todavía no existen como concepto (#05) — cuando
-// existan, Duplicate también las copiará.
+// respuestas, y deep-copia sus preguntas (#05) dentro de la misma
+// transacción — si la copia de preguntas falla, la encuesta tampoco se crea.
 func (s *SurveyService) Duplicate(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
 	survey, err := s.loadByID(ctx, id)
 	if err != nil {
@@ -225,8 +233,14 @@ func (s *SurveyService) Duplicate(ctx context.Context, user *models.User, id str
 		return nil, err
 	}
 
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
 	var newID string
-	err = s.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id::text`,
@@ -234,6 +248,16 @@ func (s *SurveyService) Duplicate(ctx context.Context, user *models.User, id str
 		survey.AnonymityLevel, survey.AllowRevisit, survey.OptionalRegistration,
 	).Scan(&newID)
 	if err != nil {
+		return nil, err
+	}
+
+	if s.questions != nil {
+		if err := s.questions.CopyQuestions(ctx, tx, id, newID); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
@@ -302,6 +326,28 @@ func (s *SurveyService) authorizeSurveyAccess(ctx context.Context, user *models.
 		return ErrSurveyForbidden
 	}
 	return nil
+}
+
+// isUUID valida el formato de un id sin llegar a Postgres — evita que un
+// valor malformado provoque un error de casteo (500) en vez de un 400.
+func isUUID(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // scanSurvey lee una fila con el orden definido en surveyColumns.

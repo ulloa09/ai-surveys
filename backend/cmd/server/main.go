@@ -32,7 +32,8 @@ func main() {
 
 	authSvc := services.NewAuthService(pool, cfg.Auth)
 	teamSvc := services.NewTeamService(pool)
-	surveySvc := services.NewSurveyService(pool)
+	questionSvc := services.NewQuestionService(pool)
+	surveySvc := services.NewSurveyService(pool, questionSvc)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -78,6 +79,12 @@ func main() {
 			r.With(appmw.RequireRole("admin")).Patch("/{id}", handlers.UpdateSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin")).Delete("/{id}", handlers.DeleteSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin")).Post("/{id}/duplicate", handlers.DuplicateSurvey(surveySvc))
+
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}/questions", handlers.ListQuestions(questionSvc, surveySvc))
+			r.With(appmw.RequireRole("admin")).Post("/{id}/questions", handlers.CreateQuestion(questionSvc, surveySvc))
+			r.With(appmw.RequireRole("admin")).Put("/{id}/questions/order", handlers.ReorderQuestions(questionSvc, surveySvc))
+			r.With(appmw.RequireRole("admin")).Patch("/{id}/questions/{qid}", handlers.UpdateQuestion(questionSvc, surveySvc))
+			r.With(appmw.RequireRole("admin")).Delete("/{id}/questions/{qid}", handlers.DeleteQuestion(questionSvc, surveySvc))
 		})
 	})
 

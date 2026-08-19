@@ -19,12 +19,13 @@ import (
 // --- mock SurveyServicer ---
 
 type fakeSurveySvc struct {
-	createFn    func(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error)
-	listFn      func(ctx context.Context, user *models.User) ([]models.Survey, error)
-	getFn       func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
-	updateFn    func(ctx context.Context, user *models.User, id string, in services.UpdateSurveyInput) (*models.Survey, error)
-	deleteFn    func(ctx context.Context, user *models.User, id string) error
-	duplicateFn func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	createFn           func(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error)
+	listFn             func(ctx context.Context, user *models.User) ([]models.Survey, error)
+	getFn              func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	updateFn           func(ctx context.Context, user *models.User, id string, in services.UpdateSurveyInput) (*models.Survey, error)
+	deleteFn           func(ctx context.Context, user *models.User, id string) error
+	duplicateFn        func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	checkWriteAccessFn func(ctx context.Context, user *models.User, surveyID string) error
 }
 
 func (f *fakeSurveySvc) Create(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
@@ -46,6 +47,9 @@ func (f *fakeSurveySvc) Duplicate(ctx context.Context, user *models.User, id str
 	return f.duplicateFn(ctx, user, id)
 }
 func (f *fakeSurveySvc) CheckWriteAccess(ctx context.Context, user *models.User, surveyID string) error {
+	if f.checkWriteAccessFn != nil {
+		return f.checkWriteAccessFn(ctx, user, surveyID)
+	}
 	return nil
 }
 
@@ -54,6 +58,7 @@ var _ handlers.SurveyServicer = (*fakeSurveySvc)(nil)
 
 const testSurveyID = "11111111-1111-1111-1111-111111111111"
 const testTeamID = "22222222-2222-2222-2222-222222222222"
+const testQuestionID = "33333333-3333-3333-3333-333333333333"
 
 // serveAuthed corre el handler envuelto en Authenticate para inyectar un
 // usuario en el contexto, agregando opcionalmente parámetros de ruta de chi.
@@ -74,6 +79,12 @@ func serveAuthed(handler http.Handler, req *http.Request, user *models.User, par
 
 func adminUser() *models.User {
 	return &models.User{ID: "u1", Role: "admin"}
+}
+
+func jsonReq(method, target, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
 }
 
 // --- CreateSurvey ---

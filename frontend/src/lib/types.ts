@@ -65,3 +65,74 @@ export const ANONYMITY_LABELS: Record<Survey['anonymity_level'], string> = {
 	partial: 'Pseudónima',
 	full: 'Anónima'
 };
+
+export interface Question {
+	id: string;
+	survey_id: string;
+	type: QuestionType;
+	text: string;
+	required: boolean;
+	ai_followup: boolean;
+	options: QuestionOptions | null;
+	order_index: number;
+	created_at: string;
+}
+
+export type QuestionType =
+	| 'open_ended'
+	| 'single_choice'
+	| 'multi_choice'
+	| 'true_false'
+	| 'linear_scale'
+	| 'ranking'
+	| 'matrix';
+
+// Opciones por tipo de pregunta.
+// El backend guarda esto como JSONB y lo devuelve tal cual.
+
+export interface ChoiceOption {
+	label: string;
+	value: string;
+}
+
+export interface ChoiceOptions {
+	choices: ChoiceOption[];
+}
+
+export interface ScaleOptions {
+	min: number;
+	max: number;
+	min_label?: string;
+	max_label?: string;
+}
+
+export interface RankingOptions {
+	items: ChoiceOption[];
+}
+
+export interface MatrixOptions {
+	rows: string[];
+	columns: string[];
+}
+
+export type QuestionOptions = ChoiceOptions | ScaleOptions | RankingOptions | MatrixOptions;
+
+export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
+	open_ended: 'Respuesta abierta',
+	single_choice: 'Opción única',
+	multi_choice: 'Opción múltiple',
+	true_false: 'Verdadero / Falso',
+	linear_scale: 'Escala lineal',
+	ranking: 'Ranking',
+	matrix: 'Matriz'
+};
+
+export const QUESTION_TYPE_DESCRIPTIONS: Record<QuestionType, string> = {
+	open_ended: 'El participante escribe libremente. La IA puede hacer seguimiento.',
+	single_choice: 'El participante elige una opción de una lista.',
+	multi_choice: 'El participante puede elegir varias opciones.',
+	true_false: 'Pregunta de sí o no.',
+	linear_scale: 'El participante elige un número en un rango, por ejemplo del 1 al 5.',
+	ranking: 'El participante ordena una lista de elementos.',
+	matrix: 'El participante evalúa varios elementos en una escala.'
+};
