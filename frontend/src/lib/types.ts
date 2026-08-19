@@ -48,6 +48,8 @@ export interface Survey {
 	status: 'draft' | 'open' | 'closed' | 'archived';
 	mode: 'conversational' | 'form' | 'prompt_only';
 	system_prompt: string | null;
+	available_languages: LanguageCode[];
+	default_language: LanguageCode;
 	anonymity_level: 'none' | 'partial' | 'full';
 	allow_revisit: boolean;
 	optional_registration: boolean;
@@ -57,6 +59,13 @@ export interface Survey {
 	created_at: string;
 	updated_at: string;
 }
+
+export type LanguageCode = 'es' | 'en';
+
+export const LANGUAGE_LABELS: Record<LanguageCode, string> = {
+	es: 'Español',
+	en: 'Inglés'
+};
 
 export const SURVEY_MODES: {
 	value: Survey['mode'];

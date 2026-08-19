@@ -12,6 +12,9 @@
 	let terminationMode = $state(survey.termination_mode);
 	let turnLimit = $state(survey.turn_limit ?? 12);
 	let timeEstimateMinutes = $state(survey.time_estimate_minutes ?? 15);
+	let spanishEnabled = $state(survey.available_languages?.includes('es') ?? true);
+	let englishEnabled = $state(survey.available_languages?.includes('en') ?? false);
+	let defaultLanguage = $state<'es' | 'en'>(survey.default_language ?? 'es');
 
 	$effect(() => {
 		mode = survey.mode;
@@ -19,6 +22,17 @@
 		terminationMode = survey.termination_mode;
 		turnLimit = survey.turn_limit ?? 12;
 		timeEstimateMinutes = survey.time_estimate_minutes ?? 15;
+		spanishEnabled = survey.available_languages?.includes('es') ?? true;
+		englishEnabled = survey.available_languages?.includes('en') ?? false;
+		defaultLanguage = survey.default_language ?? 'es';
+	});
+
+	// Al menos un idioma debe seguir marcado, y el idioma default debe
+	// pertenecer a los idiomas disponibles — el backend rechaza lo contrario.
+	$effect(() => {
+		if (!spanishEnabled && !englishEnabled) spanishEnabled = true;
+		if (defaultLanguage === 'es' && !spanishEnabled) defaultLanguage = englishEnabled ? 'en' : 'es';
+		if (defaultLanguage === 'en' && !englishEnabled) defaultLanguage = spanishEnabled ? 'es' : 'en';
 	});
 
 	const promptRequired = $derived(mode !== 'form');
@@ -106,6 +120,30 @@
 	{#if terminationMode === 'combination'}
 		<p class="hint">Los tres criterios están activos a la vez; el primero en cumplirse termina la conversación.</p>
 	{/if}
+
+	<h2>Idiomas</h2>
+	<fieldset class="language-panel">
+		<legend>Idiomas disponibles</legend>
+		<label class="check">
+			<input type="checkbox" name="available_languages" value="es" bind:checked={spanishEnabled} />
+			Español (es)
+		</label>
+		<label class="check">
+			<input type="checkbox" name="available_languages" value="en" bind:checked={englishEnabled} />
+			Inglés (en)
+		</label>
+		<label>
+			Idioma por defecto
+			<select name="default_language" bind:value={defaultLanguage}>
+				<option value="es" disabled={!spanishEnabled}>Español</option>
+				<option value="en" disabled={!englishEnabled}>Inglés</option>
+			</select>
+		</label>
+		<p class="hint-inline">
+			El respondiente elige entre los idiomas marcados; si solo hay uno, no ve selector. La IA
+			responde en el idioma elegido.
+		</p>
+	</fieldset>
 
 	<button class="primary" type="submit">Guardar configuración</button>
 </form>
@@ -245,6 +283,27 @@
 		margin: 0 0 1rem;
 	}
 
+	.language-panel {
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 0.9rem 1rem;
+		margin: 0 0 1.25rem;
+	}
+	.language-panel legend {
+		padding: 0 0.25rem;
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: var(--blue-900);
+	}
+	.language-panel label.check {
+		font-weight: 400;
+	}
+	.hint-inline {
+		font-size: 0.78rem;
+		color: var(--muted);
+		margin: 0.5rem 0 0;
+	}
+
 	label {
 		display: block;
 		margin-bottom: 1rem;
@@ -254,6 +313,11 @@
 	}
 	label.inline {
 		max-width: 260px;
+	}
+	label.check {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 	}
 
 	textarea,

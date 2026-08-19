@@ -37,9 +37,11 @@ func CreateSurvey(svc SurveyServicer) http.HandlerFunc {
 			OptionalRegistration bool    `json:"optional_registration"`
 			Mode                 string  `json:"mode"`
 			SystemPrompt         *string `json:"system_prompt"`
-			TerminationMode      string  `json:"termination_mode"`
-			TurnLimit            *int    `json:"turn_limit"`
-			TimeEstimateMinutes  *int    `json:"time_estimate_minutes"`
+			TerminationMode      string    `json:"termination_mode"`
+			TurnLimit            *int      `json:"turn_limit"`
+			TimeEstimateMinutes  *int      `json:"time_estimate_minutes"`
+			AvailableLanguages   *[]string `json:"available_languages"`
+			DefaultLanguage      string    `json:"default_language"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -109,6 +111,8 @@ func CreateSurvey(svc SurveyServicer) http.HandlerFunc {
 			TerminationMode:      body.TerminationMode,
 			TurnLimit:            body.TurnLimit,
 			TimeEstimateMinutes:  body.TimeEstimateMinutes,
+			AvailableLanguages:   body.AvailableLanguages,
+			DefaultLanguage:      body.DefaultLanguage,
 		})
 		if err != nil {
 			writeSurveyError(w, err)
@@ -171,9 +175,11 @@ func UpdateSurvey(svc SurveyServicer) http.HandlerFunc {
 			OptionalRegistration *bool   `json:"optional_registration"`
 			Mode                 *string `json:"mode"`
 			SystemPrompt         *string `json:"system_prompt"`
-			TerminationMode      *string `json:"termination_mode"`
-			TurnLimit            *int    `json:"turn_limit"`
-			TimeEstimateMinutes  *int    `json:"time_estimate_minutes"`
+			TerminationMode      *string   `json:"termination_mode"`
+			TurnLimit            *int      `json:"turn_limit"`
+			TimeEstimateMinutes  *int      `json:"time_estimate_minutes"`
+			AvailableLanguages   *[]string `json:"available_languages"`
+			DefaultLanguage      *string   `json:"default_language"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -219,6 +225,8 @@ func UpdateSurvey(svc SurveyServicer) http.HandlerFunc {
 			TerminationMode:      body.TerminationMode,
 			TurnLimit:            body.TurnLimit,
 			TimeEstimateMinutes:  body.TimeEstimateMinutes,
+			AvailableLanguages:   body.AvailableLanguages,
+			DefaultLanguage:      body.DefaultLanguage,
 		})
 		if err != nil {
 			writeSurveyError(w, err)
@@ -280,6 +288,8 @@ func writeSurveyError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "anonymity level is locked after the first response"})
 	case errors.Is(err, services.ErrSurveyHasResponses):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "survey has responses and cannot be deleted"})
+	case errors.Is(err, services.ErrInvalidLanguage):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 	}

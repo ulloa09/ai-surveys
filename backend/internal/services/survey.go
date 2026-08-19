@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -16,7 +18,11 @@ var (
 	ErrSurveyForbidden    = errors.New("access denied to survey")
 	ErrAnonymityLocked    = errors.New("anonymity level cannot change after the first response")
 	ErrSurveyHasResponses = errors.New("survey has responses and cannot be deleted")
+	ErrInvalidLanguage    = errors.New("invalid language configuration")
 )
+
+// SupportedLanguages son los únicos idiomas configurables por ahora.
+var SupportedLanguages = map[string]string{"es": "Spanish", "en": "English"}
 
 // ValidAnonymityLevels contiene los valores que acepta la columna anonymity_level.
 var ValidAnonymityLevels = map[string]bool{"none": true, "partial": true, "full": true}
@@ -38,8 +44,8 @@ var ValidTerminationModes = map[string]bool{
 const surveyColumns = `
 	s.id::text, s.title, s.description, s.owner_id::text, u.display_name,
 	s.team_id::text, t.name,
-	s.status, s.mode, s.system_prompt, s.anonymity_level,
-	s.allow_revisit, s.optional_registration,
+	s.status, s.mode, s.system_prompt, s.available_languages, s.default_language,
+	s.anonymity_level, s.allow_revisit, s.optional_registration,
 	s.termination_mode, s.turn_limit, s.time_estimate_minutes,
 	s.created_at, s.updated_at`
 
@@ -47,8 +53,8 @@ const surveyColumns = `
 // No incluye owner_name/team_name (vienen de un JOIN) — se rellenan aparte.
 const returningColumns = `
 	RETURNING id::text, title, description, owner_id::text, team_id::text,
-	          status, mode, system_prompt, anonymity_level,
-	          allow_revisit, optional_registration,
+	          status, mode, system_prompt, available_languages, default_language,
+	          anonymity_level, allow_revisit, optional_registration,
 	          termination_mode, turn_limit, time_estimate_minutes,
 	          created_at, updated_at`
 
@@ -81,6 +87,8 @@ type CreateSurveyInput struct {
 	TerminationMode      string
 	TurnLimit            *int
 	TimeEstimateMinutes  *int
+	AvailableLanguages   *[]string
+	DefaultLanguage      string
 }
 
 // UpdateSurveyInput usa punteros para distinguir un campo no enviado (nil) de
@@ -96,6 +104,8 @@ type UpdateSurveyInput struct {
 	TerminationMode      *string
 	TurnLimit            *int
 	TimeEstimateMinutes  *int
+	AvailableLanguages   *[]string
+	DefaultLanguage      *string
 }
 
 // Create inserta una encuesta nueva en estado draft. Solo admin/super_admin
@@ -107,17 +117,24 @@ func (s *SurveyService) Create(ctx context.Context, user *models.User, in Create
 		return nil, ErrSurveyForbidden
 	}
 
+	availableLanguages, defaultLanguage, err := normalizeLanguageConfig(in.AvailableLanguages, in.DefaultLanguage)
+	if err != nil {
+		return nil, err
+	}
+
 	var survey models.Survey
-	err := s.db.QueryRow(ctx, `
+	err = s.db.QueryRow(ctx, `
 		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration,
-		                      mode, system_prompt, termination_mode, turn_limit, time_estimate_minutes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		                      mode, system_prompt, termination_mode, turn_limit, time_estimate_minutes,
+		                      available_languages, default_language)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		`+returningColumns,
 		in.Title, in.Description, user.ID, in.TeamID, in.AnonymityLevel, in.AllowRevisit, in.OptionalRegistration,
 		in.Mode, in.SystemPrompt, in.TerminationMode, in.TurnLimit, in.TimeEstimateMinutes,
+		availableLanguages, defaultLanguage,
 	).Scan(&survey.ID, &survey.Title, &survey.Description, &survey.OwnerID, &survey.TeamID,
-		&survey.Status, &survey.Mode, &survey.SystemPrompt, &survey.AnonymityLevel,
-		&survey.AllowRevisit, &survey.OptionalRegistration,
+		&survey.Status, &survey.Mode, &survey.SystemPrompt, &survey.AvailableLanguages, &survey.DefaultLanguage,
+		&survey.AnonymityLevel, &survey.AllowRevisit, &survey.OptionalRegistration,
 		&survey.TerminationMode, &survey.TurnLimit, &survey.TimeEstimateMinutes,
 		&survey.CreatedAt, &survey.UpdatedAt)
 	if err != nil {
@@ -234,15 +251,35 @@ func (s *SurveyService) Update(ctx context.Context, user *models.User, id string
 		timeEstimateMinutes = in.TimeEstimateMinutes
 	}
 
+	availableLanguages := survey.AvailableLanguages
+	defaultLanguage := survey.DefaultLanguage
+	if in.AvailableLanguages != nil || in.DefaultLanguage != nil {
+		newDefault := defaultLanguage
+		if in.DefaultLanguage != nil {
+			newDefault = *in.DefaultLanguage
+		}
+		newAvailable := in.AvailableLanguages
+		if newAvailable == nil {
+			newAvailable = &availableLanguages
+		}
+		normalized, normalizedDefault, err := normalizeLanguageConfig(newAvailable, newDefault)
+		if err != nil {
+			return nil, err
+		}
+		availableLanguages, defaultLanguage = normalized, normalizedDefault
+	}
+
 	_, err = s.db.Exec(ctx, `
 		UPDATE surveys
 		SET title = $1, description = $2, anonymity_level = $3,
 		    allow_revisit = $4, optional_registration = $5,
 		    mode = $6, system_prompt = $7, termination_mode = $8,
-		    turn_limit = $9, time_estimate_minutes = $10, updated_at = NOW()
-		WHERE id = $11`,
+		    turn_limit = $9, time_estimate_minutes = $10,
+		    available_languages = $11, default_language = $12, updated_at = NOW()
+		WHERE id = $13`,
 		title, description, anonymityLevel, allowRevisit, optionalRegistration,
-		mode, systemPrompt, terminationMode, turnLimit, timeEstimateMinutes, id,
+		mode, systemPrompt, terminationMode, turnLimit, timeEstimateMinutes,
+		availableLanguages, defaultLanguage, id,
 	)
 	if err != nil {
 		return nil, err
@@ -295,12 +332,14 @@ func (s *SurveyService) Duplicate(ctx context.Context, user *models.User, id str
 	var newID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO surveys (title, description, owner_id, team_id, anonymity_level, allow_revisit, optional_registration,
-		                      mode, system_prompt, termination_mode, turn_limit, time_estimate_minutes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		                      mode, system_prompt, termination_mode, turn_limit, time_estimate_minutes,
+		                      available_languages, default_language)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id::text`,
 		survey.Title+" (copia)", survey.Description, user.ID, survey.TeamID,
 		survey.AnonymityLevel, survey.AllowRevisit, survey.OptionalRegistration,
 		survey.Mode, survey.SystemPrompt, survey.TerminationMode, survey.TurnLimit, survey.TimeEstimateMinutes,
+		survey.AvailableLanguages, survey.DefaultLanguage,
 	).Scan(&newID)
 	if err != nil {
 		return nil, err
@@ -383,6 +422,64 @@ func (s *SurveyService) authorizeSurveyAccess(ctx context.Context, user *models.
 	return nil
 }
 
+// normalizeLanguageConfig valida y normaliza available_languages y
+// default_language: descarta idiomas no soportados y duplicados, y exige
+// que default_language esté incluido en available_languages. Si el cliente
+// no manda nada, el default es español únicamente.
+func normalizeLanguageConfig(availableInput *[]string, defaultLanguage string) ([]string, string, error) {
+	available := []string{"es"}
+	if availableInput != nil {
+		available = *availableInput
+	}
+
+	if len(available) == 0 {
+		return nil, "", fmt.Errorf("%w: available_languages cannot be empty", ErrInvalidLanguage)
+	}
+
+	seen := map[string]bool{}
+	normalized := make([]string, 0, len(available))
+	for _, language := range available {
+		language = strings.TrimSpace(language)
+		if _, ok := SupportedLanguages[language]; !ok {
+			return nil, "", fmt.Errorf("%w: supported languages are es and en", ErrInvalidLanguage)
+		}
+		if seen[language] {
+			continue
+		}
+		seen[language] = true
+		normalized = append(normalized, language)
+	}
+	if len(normalized) == 0 {
+		return nil, "", fmt.Errorf("%w: available_languages cannot be empty", ErrInvalidLanguage)
+	}
+
+	if defaultLanguage == "" {
+		defaultLanguage = normalized[0]
+	}
+	defaultLanguage = strings.TrimSpace(defaultLanguage)
+	if _, ok := SupportedLanguages[defaultLanguage]; !ok {
+		return nil, "", fmt.Errorf("%w: supported languages are es and en", ErrInvalidLanguage)
+	}
+	if !slices.Contains(normalized, defaultLanguage) {
+		return nil, "", fmt.Errorf("%w: default_language must be included in available_languages", ErrInvalidLanguage)
+	}
+	return normalized, defaultLanguage, nil
+}
+
+// ValidateSurveyLanguage verifica que un idioma esté soportado y disponible
+// para una encuesta en particular. Lo usan los slices posteriores (#10, #12)
+// al validar el idioma elegido por un respondiente.
+func ValidateSurveyLanguage(available []string, language string) error {
+	language = strings.TrimSpace(language)
+	if _, ok := SupportedLanguages[language]; !ok {
+		return fmt.Errorf("%w: supported languages are es and en", ErrInvalidLanguage)
+	}
+	if !slices.Contains(available, language) {
+		return fmt.Errorf("%w: language is not available for this survey", ErrInvalidLanguage)
+	}
+	return nil
+}
+
 // isUUID valida el formato de un id sin llegar a Postgres — evita que un
 // valor malformado provoque un error de casteo (500) en vez de un 400.
 func isUUID(value string) bool {
@@ -412,8 +509,8 @@ func scanSurvey(row pgx.Row) (*models.Survey, error) {
 	err := row.Scan(
 		&s.ID, &s.Title, &s.Description, &s.OwnerID, &s.OwnerName,
 		&s.TeamID, &s.TeamName,
-		&s.Status, &s.Mode, &s.SystemPrompt, &s.AnonymityLevel,
-		&s.AllowRevisit, &s.OptionalRegistration,
+		&s.Status, &s.Mode, &s.SystemPrompt, &s.AvailableLanguages, &s.DefaultLanguage,
+		&s.AnonymityLevel, &s.AllowRevisit, &s.OptionalRegistration,
 		&s.TerminationMode, &s.TurnLimit, &s.TimeEstimateMinutes,
 		&s.CreatedAt, &s.UpdatedAt,
 	)

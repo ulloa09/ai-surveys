@@ -27,15 +27,22 @@ export const actions: Actions = {
 		const terminationMode = String(form.get('termination_mode') ?? 'turn_limit');
 		const turnLimitRaw = String(form.get('turn_limit') ?? '').trim();
 		const timeEstimateRaw = String(form.get('time_estimate_minutes') ?? '').trim();
+		const availableLanguages = form.getAll('available_languages').map((value) => String(value));
+		const defaultLanguage = String(form.get('default_language') ?? 'es');
 
 		if (mode !== 'form' && !systemPrompt) {
 			return fail(400, { error: 'El system prompt es obligatorio para los modos B y C.' });
+		}
+		if (availableLanguages.length === 0) {
+			return fail(400, { error: 'Selecciona al menos un idioma.' });
 		}
 
 		const payload: Record<string, unknown> = {
 			mode,
 			system_prompt: systemPrompt || null,
-			termination_mode: terminationMode
+			termination_mode: terminationMode,
+			available_languages: availableLanguages,
+			default_language: defaultLanguage
 		};
 		if (terminationMode === 'turn_limit' || terminationMode === 'combination') {
 			payload.turn_limit = turnLimitRaw ? Number(turnLimitRaw) : 12;

@@ -23,6 +23,8 @@ type Survey struct {
 	Status               string    `json:"status"`
 	Mode                 string    `json:"mode"`
 	SystemPrompt         *string   `json:"system_prompt"`
+	AvailableLanguages   []string  `json:"available_languages"`
+	DefaultLanguage      string    `json:"default_language"`
 	AnonymityLevel       string    `json:"anonymity_level"`
 	AllowRevisit         bool      `json:"allow_revisit"`
 	OptionalRegistration bool      `json:"optional_registration"`
