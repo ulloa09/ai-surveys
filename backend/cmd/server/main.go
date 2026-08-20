@@ -94,6 +94,14 @@ func main() {
 		// SSE streaming (admin)
 		r.Get("/api/responses/{id}/stream", handlers.StreamTurn(settingsSvc, responseSvc))
 
+		// Reanudación del lado del servidor (issue #14) — requiere sesión.
+		r.Get("/api/responses/{id}", handlers.GetResponseDetail(engineSvc, teamSvc))
+		r.Post("/api/responses/{id}/abandon", handlers.AbandonResponse(engineSvc, teamSvc))
+
+		// Busca la respuesta previa del usuario autenticado (allow_revisit).
+		// El user_id se deriva de la sesión — nunca es un query param público.
+		r.Get("/api/responses/by-user", handlers.GetResponseByUser(engineSvc))
+
 		// Dev test
 		r.Post("/api/dev/test-ai", handlers.DevTestAI(settingsSvc, cfg.Auth.AppEnv))
 
@@ -135,6 +143,11 @@ func main() {
 			r.With(appmw.RequireRole("admin")).Put("/{id}/questions/order", handlers.ReorderQuestions(questionSvc, surveySvc))
 			r.With(appmw.RequireRole("admin")).Patch("/{id}/questions/{qid}", handlers.UpdateQuestion(questionSvc, surveySvc))
 			r.With(appmw.RequireRole("admin")).Delete("/{id}/questions/{qid}", handlers.DeleteQuestion(questionSvc, surveySvc))
+
+			// Reanudación del lado del servidor (issue #14) — sin restricción de
+			// rol: cualquier usuario autenticado (incluido alumno) consulta solo
+			// su propia respuesta reanudable, no datos de otros.
+			r.Get("/{id}/my-response", handlers.GetMyResponse(engineSvc))
 		})
 	})
 

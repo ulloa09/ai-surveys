@@ -1036,3 +1036,128 @@ func (e *EngineService) GetResponseStatus(ctx context.Context, responseID string
 	}
 	return status, nil
 }
+
+// GetResponseByUser busca la respuesta más reciente de un usuario para una
+// encuesta específica. Lo usa el landing con allow_revisit para redirigir en
+// vez de bloquear.
+func (e *EngineService) GetResponseByUser(ctx context.Context, surveyID, userID string) (*models.Response, error) {
+	row := e.db.QueryRow(ctx, `
+		SELECT r.id::text, r.survey_id::text, r.user_id::text, r.fingerprint_hash,
+		       r.status, r.language, r.started_at, r.submitted_at, r.updated_at,
+		       r.current_question_index, r.turn_count, r.registered_name, r.registered_email
+		FROM responses r
+		WHERE r.survey_id = $1 AND r.user_id = $2
+		ORDER BY r.started_at DESC
+		LIMIT 1`, surveyID, userID)
+	var response models.Response
+	err := row.Scan(
+		&response.ID, &response.SurveyID, &response.UserID, &response.FingerprintHash,
+		&response.Status, &response.Language, &response.StartedAt, &response.SubmittedAt,
+		&response.UpdatedAt, &response.CurrentQuestionIndex, &response.TurnCount,
+		&response.RegisteredName, &response.RegisteredEmail,
+	)
+	if err != nil {
+		return nil, ErrResponseNotFound
+	}
+	return &response, nil
+}
+
+// GetMyResponse devuelve la respuesta reanudable más reciente de un usuario
+// para una encuesta específica: la que está en progreso o pendiente de
+// envío. Se usa en el landing del respondiente autenticado para ofrecer
+// "Continuar donde lo dejaste" desde cualquier dispositivo (issue #14). Si
+// el usuario tiene dos respuestas en progreso (caso borde) se devuelve la
+// más reciente. Devuelve (nil, nil) cuando no hay ninguna reanudable — no es
+// un error, simplemente no hay nada que ofrecer.
+func (e *EngineService) GetMyResponse(ctx context.Context, surveyID, userID string) (*models.Response, error) {
+	if !isUUID(surveyID) || !isUUID(userID) {
+		return nil, nil
+	}
+	row := e.db.QueryRow(ctx, `
+		SELECT r.id::text, r.survey_id::text, r.user_id::text, r.fingerprint_hash,
+		       r.status, r.language, r.started_at, r.submitted_at, r.updated_at,
+		       r.current_question_index, r.turn_count, r.registered_name, r.registered_email
+		FROM responses r
+		WHERE r.survey_id = $1 AND r.user_id = $2
+		  AND r.status IN ('in_progress', 'pending_submission')
+		ORDER BY r.started_at DESC
+		LIMIT 1`, surveyID, userID)
+	var response models.Response
+	err := row.Scan(
+		&response.ID, &response.SurveyID, &response.UserID, &response.FingerprintHash,
+		&response.Status, &response.Language, &response.StartedAt, &response.SubmittedAt,
+		&response.UpdatedAt, &response.CurrentQuestionIndex, &response.TurnCount,
+		&response.RegisteredName, &response.RegisteredEmail,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+// ResponseDetail es la vista consolidada de una respuesta: el registro, el
+// transcript completo, los ids de preguntas ya contestadas, el índice de la
+// pregunta activa y el status. La consumen tanto la reanudación (#14) como la
+// función de revisita (#13).
+type ResponseDetail struct {
+	Response             *models.Response `json:"response"`
+	Turns                []Turn           `json:"turns"`
+	AnsweredQuestionIDs  []string         `json:"answered_question_ids"`
+	CurrentQuestionIndex int              `json:"current_question_index"`
+	Status               string           `json:"status"`
+}
+
+// GetResponseDetail arma la vista consolidada de una respuesta. Devuelve también
+// la encuesta asociada para que el handler pueda aplicar el control de acceso por
+// dueño / equipo. Devuelve ErrResponseNotFound si la respuesta no existe.
+func (e *EngineService) GetResponseDetail(ctx context.Context, responseID string) (*ResponseDetail, *models.Survey, error) {
+	response, survey, err := e.getResponseWithSurvey(ctx, responseID)
+	if err != nil {
+		return nil, nil, err
+	}
+	turns, err := e.GetTurns(ctx, responseID)
+	if err != nil {
+		return nil, nil, err
+	}
+	coverage, err := e.getAnsweredQuestions(ctx, responseID)
+	if err != nil {
+		return nil, nil, err
+	}
+	answered := make([]string, 0, len(coverage))
+	for id := range coverage {
+		answered = append(answered, id)
+	}
+	detail := &ResponseDetail{
+		Response:             response,
+		Turns:                turns,
+		AnsweredQuestionIDs:  answered,
+		CurrentQuestionIndex: response.CurrentQuestionIndex,
+		Status:               response.Status,
+	}
+	return detail, survey, nil
+}
+
+// GetResponseSurvey carga solo la respuesta y su encuesta, sin el transcript.
+// Lo usa el handler de abandono para verificar propiedad antes de mutar.
+func (e *EngineService) GetResponseSurvey(ctx context.Context, responseID string) (*models.Response, *models.Survey, error) {
+	return e.getResponseWithSurvey(ctx, responseID)
+}
+
+// AbandonResponse marca una respuesta como abandonada. Lo invoca el flujo
+// "Comenzar de nuevo": el usuario descarta su sesión previa para arrancar una
+// limpia. Solo afecta sesiones aún vivas (in_progress / pending_submission /
+// not_started); es idempotente sobre cualquier otro estado.
+func (e *EngineService) AbandonResponse(ctx context.Context, responseID string) error {
+	if !isUUID(responseID) {
+		return ErrResponseNotFound
+	}
+	_, err := e.db.Exec(ctx,
+		`UPDATE responses
+		 SET status = 'abandoned', updated_at = NOW()
+		 WHERE id = $1 AND status IN ('in_progress', 'pending_submission', 'not_started')`,
+		responseID)
+	return err
+}

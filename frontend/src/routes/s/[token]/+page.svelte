@@ -17,6 +17,15 @@
 	// sesión anterior en lugar de crear una nueva (criterio de aceptación #09).
 	let resumeResponseId = $state<string | null>(null);
 
+	// Reanudación del lado del servidor (issue #14): para usuarios autenticados
+	// el backend detecta la respuesta en progreso por identidad de sesión, de modo
+	// que se puede continuar desde cualquier dispositivo. Tiene prioridad sobre el
+	// resume token de localStorage (que solo aplica al mismo dispositivo, #09).
+	const serverResume = $derived(data.resumeResponse as { id: string; status: string } | null);
+
+	// Diálogo de confirmación para "Comenzar de nuevo": descartar la sesión previa.
+	let showRestartConfirm = $state(false);
+
 	const languageLabels: Record<string, string> = {
 		es: 'Español',
 		en: 'English'
@@ -125,7 +134,17 @@
 					<p>«{survey.title}» ya no recibe respuestas. Gracias por tu interés.</p>
 				</section>
 			{:else}
-				{#if resumeResponseId}
+				{#if serverResume}
+					<section class="resume" aria-live="polite">
+						<div class="resume-copy">
+							<strong>Tienes una sesión sin terminar</strong>
+							<span>Puedes continuar justo donde la dejaste, en este o cualquier dispositivo.</span>
+						</div>
+						<button type="button" class="btn-ghost" onclick={() => goToConversation(serverResume.id)}>
+							Continuar donde lo dejaste
+						</button>
+					</section>
+				{:else if resumeResponseId}
 					<section class="resume" aria-live="polite">
 						<div class="resume-copy">
 							<strong>Tienes una sesión sin terminar</strong>
@@ -137,7 +156,12 @@
 					</section>
 				{/if}
 
-				<form method="POST" action="?/start" use:enhance={submitStart} class="start-form">
+				<form
+					method="POST"
+					action={serverResume ? '?/restart' : '?/start'}
+					use:enhance={submitStart}
+					class="start-form"
+				>
 					{#if survey.available_languages.length > 1}
 						<label class="field">
 							<span class="label">Idioma</span>
@@ -183,10 +207,45 @@
 						<p class="error" role="alert">{form.error}</p>
 					{/if}
 
-					<button type="submit" class="btn-primary" disabled={starting}>
-						{starting ? 'Iniciando…' : 'Comenzar'}
-						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-					</button>
+					{#if serverResume}
+						<!-- previous_id viaja a la acción `restart` para abandonar la sesión previa -->
+						<input type="hidden" name="previous_id" value={serverResume.id} />
+						<button
+							type="button"
+							class="btn-secondary"
+							disabled={starting}
+							onclick={() => (showRestartConfirm = true)}
+						>
+							Comenzar de nuevo
+						</button>
+					{:else}
+						<button type="submit" class="btn-primary" disabled={starting}>
+							{starting ? 'Iniciando…' : 'Comenzar'}
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+						</button>
+					{/if}
+
+					{#if showRestartConfirm}
+						<div class="confirm" role="alertdialog" aria-label="Confirmar empezar de nuevo">
+							<p class="confirm-copy">
+								Si empiezas de nuevo, tu sesión anterior se descartará y no podrás recuperarla.
+								¿Quieres continuar?
+							</p>
+							<div class="confirm-actions">
+								<button
+									type="button"
+									class="btn-ghost"
+									disabled={starting}
+									onclick={() => (showRestartConfirm = false)}
+								>
+									Cancelar
+								</button>
+								<button type="submit" class="btn-danger" disabled={starting}>
+									{starting ? 'Iniciando…' : 'Sí, empezar de nuevo'}
+								</button>
+							</div>
+						</div>
+					{/if}
 				</form>
 			{/if}
 		</div>
@@ -497,6 +556,87 @@
 	.btn-ghost:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
+	}
+
+	/* Botón "Comenzar de nuevo": secundario, menos prominente que el primario. */
+	.btn-secondary {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		width: 100%;
+		border: 1px solid var(--line);
+		border-radius: var(--radius-sm);
+		padding: 0.85rem 1.2rem;
+		background: var(--white);
+		color: var(--blue-deep);
+		font-size: 0.98rem;
+		font-weight: 700;
+		cursor: pointer;
+		transition:
+			border-color 0.12s ease,
+			background 0.12s ease;
+	}
+
+	.btn-secondary:hover:not(:disabled) {
+		border-color: var(--sky);
+		background: var(--sky-soft);
+	}
+
+	.btn-secondary:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	/* ── Confirmación de "Comenzar de nuevo" ────────────────── */
+	.confirm {
+		display: flex;
+		flex-direction: column;
+		gap: 0.9rem;
+		padding: 1rem 1.1rem;
+		background: #fff7ed;
+		border: 1px solid #fed7aa;
+		border-radius: var(--radius-sm);
+	}
+
+	.confirm-copy {
+		margin: 0;
+		color: #9a3412;
+		font-size: 0.9rem;
+		line-height: 1.55;
+	}
+
+	.confirm-actions {
+		display: flex;
+		gap: 0.6rem;
+	}
+
+	.confirm-actions .btn-ghost {
+		flex: 1;
+	}
+
+	.btn-danger {
+		flex: 1;
+		border: 0;
+		border-radius: 10px;
+		padding: 0.6rem 1rem;
+		background: #c2410c;
+		color: var(--white);
+		font-size: 0.9rem;
+		font-weight: 700;
+		cursor: pointer;
+		transition:
+			background 0.12s ease,
+			opacity 0.12s ease;
+	}
+
+	.btn-danger:hover:not(:disabled) {
+		background: #9a3412;
+	}
+
+	.btn-danger:disabled {
+		opacity: 0.65;
+		cursor: progress;
 	}
 
 	/* ── States ─────────────────────────────────────────────── */

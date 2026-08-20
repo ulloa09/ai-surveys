@@ -40,7 +40,7 @@ function ensureDeviceId(cookies: RequestEvent['cookies'], anonymityLevel: string
 	return deviceId;
 }
 
-export const load: PageServerLoad = async ({ params, cookies }) => {
+export const load: PageServerLoad = async ({ params, locals, cookies }) => {
 	// Quién puede abrir la encuesta lo decide el backend según su anonymity_level:
 	// las 'full' (anónimas) tienen link público y se abren sin cuenta; el resto
 	// exige sesión y pertenecer al equipo al que se desplegó el link. Por eso NO
@@ -76,76 +76,137 @@ export const load: PageServerLoad = async ({ params, cookies }) => {
 	// respondiente mande el formulario (no-op si no es 'partial' o si ya la tiene).
 	ensureDeviceId(cookies, survey.anonymity_level);
 
-	return { survey };
+	// Reanudación del lado del servidor (issue #14): detectamos la respuesta en
+	// progreso / pendiente de envío del usuario por identidad de sesión, de
+	// modo que pueda continuar desde cualquier dispositivo. Se ignora
+	// silenciosamente cualquier error — en el peor caso simplemente no se ofrece.
+	//
+	// Solo aplica a quien tiene sesión: en una encuesta anónima no hay identidad
+	// contra la cual buscar una respuesta previa (ahí reanudar depende del resume
+	// token de localStorage, #09).
+	let resumeResponse: { id: string; status: string } | null = null;
+	if (survey.status === 'open' && locals.user) {
+		try {
+			const myRes = await fetch(`${API}/api/surveys/${survey.id}/my-response`, {
+				headers: authHeaders(session)
+			});
+			if (myRes.ok) {
+				const body = await myRes.json();
+				if (body.response) {
+					resumeResponse = { id: body.response.id, status: body.response.status };
+				}
+			}
+		} catch {
+			// Backend inaccesible — no ofrecemos reanudar.
+		}
+	}
+
+	return { survey, resumeResponse };
 };
+
+// createResponse ejecuta el flujo compartido de creación de una respuesta:
+// valida acceso, la crea en el backend y devuelve el id (+ resume token) para
+// que el cliente navegue a la conversación. Lo usan tanto la acción `start`
+// como `restart` (esta última tras abandonar la sesión previa).
+async function createResponse(event: RequestEvent, form: FormData) {
+	const { params, locals, cookies } = event;
+
+	// Sin gate de sesión propio: contestar sin cuenta es válido en las encuestas
+	// anónimas ('full'). Para las demás el backend responde 401 y se traduce
+	// abajo a un mensaje claro.
+	const session = cookies.get('session');
+	const language = String(form.get('language') ?? '').trim();
+	const registeredName = String(form.get('registered_name') ?? '').trim();
+	const registeredEmail = String(form.get('registered_email') ?? '').trim();
+
+	const surveyRes = await fetch(`${API}/api/public/surveys/${params.token}`, {
+		headers: authHeaders(session)
+	});
+	if (surveyRes.status === 401) {
+		return fail(401, { error: 'Debes iniciar sesión para responder esta encuesta.' });
+	}
+	if (surveyRes.status === 403) {
+		return fail(403, { error: 'No perteneces al equipo al que se desplegó esta encuesta.' });
+	}
+	if (!surveyRes.ok) return fail(404, { error: 'Encuesta no encontrada.' });
+	const survey = await surveyRes.json();
+
+	// En 'partial' este id es lo único que permite detectar que este dispositivo ya
+	// contestó — la respuesta no guarda user_id. Normalmente la cookie ya viene del
+	// landing; se re-emite acá por si la petición no pasó por load().
+	const deviceId = ensureDeviceId(cookies, survey.anonymity_level);
+
+	const body: Record<string, unknown> = {
+		language: language || undefined,
+		registered_name: registeredName || undefined,
+		registered_email: registeredEmail || undefined
+		// user_id NO se manda: el backend siempre lo toma de la sesión
+		// autenticada (Cookie), nunca de un valor que mande el cliente.
+	};
+
+	const res = await fetch(`${API}/api/public/surveys/${params.token}/responses`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...authHeaders(session, deviceId) },
+		body: JSON.stringify(body)
+	});
+
+	if (!res.ok) {
+		const resBody = await res.json().catch(() => ({}));
+		if (res.status === 401) {
+			return fail(401, { error: 'Debes iniciar sesión para responder esta encuesta.' });
+		}
+		if (res.status === 403) {
+			return fail(403, {
+				error: 'No perteneces al equipo al que se desplegó esta encuesta, así que no puedes responderla.'
+			});
+		}
+		if (res.status === 409 && resBody.error === 'already responded to this survey') {
+			// Si allow_revisit está activo, buscar la respuesta existente del usuario
+			// y redirigir al chat en vez de mostrar error.
+			if (survey.allow_revisit && locals.user?.id) {
+				const existingRes = await fetch(`${API}/api/responses/by-user?survey_id=${survey.id}`, {
+					headers: { Cookie: `session=${session}` }
+				});
+				if (existingRes.ok) {
+					const existing = await existingRes.json();
+					return { responseId: existing.id as string, resumeToken: null };
+				}
+			}
+			return fail(409, {
+				error: 'Ya has respondido esta encuesta. Solo se permite una respuesta por persona.'
+			});
+		}
+		return fail(res.status, { error: resBody.error ?? 'No se pudo iniciar la encuesta.' });
+	}
+
+	const result = await res.json();
+	return {
+		responseId: result.response.id as string,
+		resumeToken: (result.resume_token ?? null) as string | null
+	};
+}
 
 export const actions: Actions = {
 	start: async (event) => {
-		const { params, cookies } = event;
 		const form = await event.request.formData();
+		return createResponse(event, form);
+	},
 
-		// Sin gate de sesión propio: contestar sin cuenta es válido en las
-		// encuestas anónimas ('full'). Para las demás el backend responde 401 y
-		// se traduce abajo a un mensaje claro.
-		const session = cookies.get('session');
-		const language = String(form.get('language') ?? '').trim();
-		const registeredName = String(form.get('registered_name') ?? '').trim();
-		const registeredEmail = String(form.get('registered_email') ?? '').trim();
+	// "Comenzar de nuevo": el usuario descarta su sesión previa (marcada como
+	// abandoned) y arranca una limpia. Requiere sesión; el backend valida que la
+	// respuesta a abandonar sea suya.
+	restart: async (event) => {
+		const form = await event.request.formData();
+		const previousId = String(form.get('previous_id') ?? '').trim();
+		const session = event.cookies.get('session');
 
-		const surveyRes = await fetch(`${API}/api/public/surveys/${params.token}`, {
-			headers: authHeaders(session)
-		});
-		if (surveyRes.status === 401) {
-			return fail(401, { error: 'Debes iniciar sesión para responder esta encuesta.' });
-		}
-		if (surveyRes.status === 403) {
-			return fail(403, { error: 'No perteneces al equipo al que se desplegó esta encuesta.' });
-		}
-		if (!surveyRes.ok) return fail(404, { error: 'Encuesta no encontrada.' });
-		const survey = await surveyRes.json();
-
-		// En 'partial' este id es lo único que permite detectar que este
-		// dispositivo ya contestó — la respuesta no guarda user_id. Normalmente
-		// la cookie ya viene del landing; se re-emite acá por si la petición no
-		// pasó por load().
-		const deviceId = ensureDeviceId(cookies, survey.anonymity_level);
-
-		const body: Record<string, unknown> = {
-			language: language || undefined,
-			registered_name: registeredName || undefined,
-			registered_email: registeredEmail || undefined
-			// user_id NO se manda: el backend siempre lo toma de la sesión
-			// autenticada (Cookie), nunca de un valor que mande el cliente.
-		};
-
-		const res = await fetch(`${API}/api/public/surveys/${params.token}/responses`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', ...authHeaders(session, deviceId) },
-			body: JSON.stringify(body)
-		});
-
-		if (!res.ok) {
-			const resBody = await res.json().catch(() => ({}));
-			if (res.status === 401) {
-				return fail(401, { error: 'Debes iniciar sesión para responder esta encuesta.' });
-			}
-			if (res.status === 403) {
-				return fail(403, {
-					error: 'No perteneces al equipo al que se desplegó esta encuesta, así que no puedes responderla.'
-				});
-			}
-			if (res.status === 409 && resBody.error === 'already responded to this survey') {
-				return fail(409, {
-					error: 'Ya has respondido esta encuesta. Solo se permite una respuesta por persona.'
-				});
-			}
-			return fail(res.status, { error: resBody.error ?? 'No se pudo iniciar la encuesta.' });
+		if (previousId && session) {
+			await fetch(`${API}/api/responses/${previousId}/abandon`, {
+				method: 'POST',
+				headers: { Cookie: `session=${session}` }
+			});
 		}
 
-		const result = await res.json();
-		return {
-			responseId: result.response.id as string,
-			resumeToken: (result.resume_token ?? null) as string | null
-		};
+		return createResponse(event, form);
 	}
 };
