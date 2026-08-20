@@ -18,6 +18,11 @@ type Config struct {
 	DB             DBConfig
 	Auth           AuthConfig
 	FrontendOrigin string
+	// FingerprintSalt es la sal secreta del HMAC que identifica dispositivos en
+	// las encuestas pseudónimas (ver internal/fingerprint). Debe ser estable: si
+	// cambia, los hashes ya guardados dejan de corresponder y los respondientes
+	// que ya contestaron podrían volver a hacerlo.
+	FingerprintSalt string
 }
 
 // DBConfig tiene los datos de conexión a PostgreSQL.
@@ -67,7 +72,8 @@ func Load() *Config {
 			SessionDurationH: envInt("SESSION_DURATION_HOURS", 24),
 			AppEnv:           env("APP_ENV", "development"),
 		},
-		FrontendOrigin: env("FRONTEND_ORIGIN", "http://localhost:5173"),
+		FrontendOrigin:  env("FRONTEND_ORIGIN", "http://localhost:5173"),
+		FingerprintSalt: env("FINGERPRINT_SALT", "dev-fingerprint-salt-change-me"),
 	}
 }
 

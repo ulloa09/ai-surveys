@@ -36,6 +36,7 @@ func main() {
 	teamSvc := services.NewTeamService(pool)
 	questionSvc := services.NewQuestionService(pool)
 	surveySvc := services.NewSurveyService(pool, questionSvc, cfg.FrontendOrigin)
+	responseSvc := services.NewResponseService(pool)
 
 	startScheduler(surveySvc)
 
@@ -49,6 +50,19 @@ func main() {
 	r.Post("/api/auth/register", handlers.Register(authSvc))
 	r.Post("/api/auth/login", handlers.Login(authSvc, cfg.Auth.AppEnv, cfg.Auth.SessionDurationH*3600))
 	r.Post("/api/auth/logout", handlers.Logout(authSvc))
+
+	// Encuestas de respondientes. El requisito de sesión depende del
+	// anonymity_level de la encuesta, que solo se conoce después de resolver el
+	// token — por eso estas rutas usan OptionalAuthenticate (adjunta el usuario
+	// si hay sesión válida, pero no rechaza a nadie) y son los handlers quienes
+	// aplican el gate:
+	//
+	//   - 'full' (anónima): link público de verdad. Sin cuenta y sin roster.
+	//   - 'partial' / 'none': exigen sesión y membresía del equipo dueño de la
+	//     encuesta — ver GetPublicSurvey y CreateResponse.
+	r.With(appmw.OptionalAuthenticate(authSvc)).Get("/api/public/surveys/{token}", handlers.GetPublicSurvey(responseSvc))
+	r.With(appmw.OptionalAuthenticate(authSvc)).Post("/api/public/surveys/{token}/responses", handlers.CreateResponse(responseSvc, cfg.FingerprintSalt))
+	r.Get("/api/public/surveys/{token}/resume", handlers.ResumeResponse(responseSvc))
 
 	// ── Rutas protegidas ─────────────────────────────────────────────────
 	r.Group(func(r chi.Router) {

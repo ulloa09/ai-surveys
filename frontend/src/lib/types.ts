@@ -205,3 +205,18 @@ export const QUESTION_TYPE_DESCRIPTIONS: Record<QuestionType, string> = {
 	ranking: 'El participante ordena una lista de elementos.',
 	matrix: 'El participante evalúa varios elementos en una escala.'
 };
+
+export interface SurveyResponse {
+	id: string;
+	survey_id: string;
+	user_id: string | null;
+	fingerprint_hash: string | null;
+	status: 'in_progress' | 'submitted' | 'abandoned';
+	language: LanguageCode;
+	started_at: string;
+	submitted_at: string | null;
+	current_question_index: number;
+	turn_count: number;
+	registered_name: string | null;
+	registered_email: string | null;
+}
