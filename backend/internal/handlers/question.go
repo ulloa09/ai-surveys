@@ -6,6 +6,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	appmw "github.com/ulloa09/ai-surveys/backend/internal/middleware"
 	"github.com/ulloa09/ai-surveys/backend/internal/models"
 	"github.com/ulloa09/ai-surveys/backend/internal/services"
@@ -217,5 +220,32 @@ func writeQuestionError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+	}
+}
+
+// ListPublicQuestions maneja GET /api/public/surveys/{token}/questions.
+// Endpoint público — los respondientes no necesitan sesión.
+func ListPublicQuestions(svc QuestionServicer, db *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := chi.URLParam(r, "token")
+
+		var surveyID string
+		err := db.QueryRow(r.Context(),
+			`SELECT id::text FROM surveys WHERE public_token = $1 AND status = 'open'`, token,
+		).Scan(&surveyID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "survey not found"})
+			return
+		}
+
+		questions, err := svc.List(r.Context(), surveyID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+		if questions == nil {
+			questions = []models.Question{}
+		}
+		writeJSON(w, http.StatusOK, questions)
 	}
 }

@@ -66,6 +66,7 @@ func main() {
 	//   - 'partial' / 'none': exigen sesión y membresía del equipo dueño de la
 	//     encuesta — ver GetPublicSurvey y CreateResponse.
 	r.With(appmw.OptionalAuthenticate(authSvc)).Get("/api/public/surveys/{token}", handlers.GetPublicSurvey(responseSvc))
+	r.Get("/api/public/surveys/{token}/questions", handlers.ListPublicQuestions(questionSvc, pool))
 	r.With(appmw.OptionalAuthenticate(authSvc)).Post("/api/public/surveys/{token}/responses", handlers.CreateResponse(responseSvc, cfg.FingerprintSalt))
 	r.Get("/api/public/surveys/{token}/resume", handlers.ResumeResponse(responseSvc))
 
