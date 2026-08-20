@@ -11,6 +11,7 @@ type Response struct {
 	Language             string     `json:"language"`
 	StartedAt            time.Time  `json:"started_at"`
 	SubmittedAt          *time.Time `json:"submitted_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 	CurrentQuestionIndex int        `json:"current_question_index"`
 	TurnCount            int        `json:"turn_count"`
 	RegisteredName       *string    `json:"registered_name"`

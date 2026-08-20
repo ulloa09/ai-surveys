@@ -41,6 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("settings service: %v", err)
 	}
+	engineSvc := services.NewEngineService(pool, settingsSvc, questionSvc)
 
 	startScheduler(surveySvc)
 
@@ -67,6 +68,16 @@ func main() {
 	r.With(appmw.OptionalAuthenticate(authSvc)).Get("/api/public/surveys/{token}", handlers.GetPublicSurvey(responseSvc))
 	r.With(appmw.OptionalAuthenticate(authSvc)).Post("/api/public/surveys/{token}/responses", handlers.CreateResponse(responseSvc, cfg.FingerprintSalt))
 	r.Get("/api/public/surveys/{token}/resume", handlers.ResumeResponse(responseSvc))
+
+	// Engine — público porque los respondientes anónimos no tienen sesión.
+	r.Post("/api/responses/{id}/turns", handlers.ProcessTurn(engineSvc))
+	r.Post("/api/responses/{id}/submit", handlers.SubmitResponse(engineSvc))
+	r.Post("/api/responses/{id}/expire", handlers.ExpireResponse(engineSvc))
+	r.Get("/api/responses/{id}/answers", handlers.GetAnswers(engineSvc))
+	r.Post("/api/responses/{id}/answers", handlers.RecordAnswer(engineSvc))
+	r.Post("/api/responses/{id}/open-answer", handlers.RecordOpenAnswer(engineSvc))
+	r.Get("/api/responses/{id}/status", handlers.GetResponseStatus(engineSvc))
+	r.Get("/api/responses/{id}/turns", handlers.GetTurns(engineSvc))
 
 	// ── Rutas protegidas ─────────────────────────────────────────────────
 	r.Group(func(r chi.Router) {
