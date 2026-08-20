@@ -20,19 +20,23 @@ import (
 
 type fakeSurveySvc struct {
 	createFn           func(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error)
-	listFn             func(ctx context.Context, user *models.User) ([]models.Survey, error)
+	listFn             func(ctx context.Context, user *models.User, includeArchived bool) ([]models.Survey, error)
 	getFn              func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 	updateFn           func(ctx context.Context, user *models.User, id string, in services.UpdateSurveyInput) (*models.Survey, error)
 	deleteFn           func(ctx context.Context, user *models.User, id string) error
 	duplicateFn        func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 	checkWriteAccessFn func(ctx context.Context, user *models.User, surveyID string) error
+	activateFn         func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	closeFn            func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	reopenFn           func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	archiveFn          func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 }
 
 func (f *fakeSurveySvc) Create(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
 	return f.createFn(ctx, user, in)
 }
-func (f *fakeSurveySvc) List(ctx context.Context, user *models.User) ([]models.Survey, error) {
-	return f.listFn(ctx, user)
+func (f *fakeSurveySvc) List(ctx context.Context, user *models.User, includeArchived bool) ([]models.Survey, error) {
+	return f.listFn(ctx, user, includeArchived)
 }
 func (f *fakeSurveySvc) Get(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
 	return f.getFn(ctx, user, id)
@@ -51,6 +55,18 @@ func (f *fakeSurveySvc) CheckWriteAccess(ctx context.Context, user *models.User,
 		return f.checkWriteAccessFn(ctx, user, surveyID)
 	}
 	return nil
+}
+func (f *fakeSurveySvc) Activate(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.activateFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) Close(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.closeFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) Reopen(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.reopenFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) Archive(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.archiveFn(ctx, user, id)
 }
 
 // ensure fakeSurveySvc satisfies handlers.SurveyServicer at compile time
@@ -224,7 +240,7 @@ func TestCreateSurveyHandler_TimeEstimateRequiresMinutes(t *testing.T) {
 
 func TestListSurveysHandler_EmptyReturnsArray(t *testing.T) {
 	svc := &fakeSurveySvc{
-		listFn: func(_ context.Context, _ *models.User) ([]models.Survey, error) { return nil, nil },
+		listFn: func(_ context.Context, _ *models.User, _ bool) ([]models.Survey, error) { return nil, nil },
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/surveys", nil)
 	rr := serveAuthed(handlers.ListSurveys(svc), req, adminUser(), nil)
@@ -301,5 +317,91 @@ func TestDuplicateSurveyHandler_Created(t *testing.T) {
 	}
 	if !strings.HasSuffix(got.Title, "(copia)") {
 		t.Errorf("title = %q, want suffix (copia)", got.Title)
+	}
+}
+
+// --- Lifecycle transitions (#08) ---
+
+func TestActivateSurveyHandler_DraftToOpen(t *testing.T) {
+	svc := &fakeSurveySvc{
+		activateFn: func(_ context.Context, _ *models.User, id string) (*models.Survey, error) {
+			return &models.Survey{ID: id, Status: "open"}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/activate", nil)
+	rr := serveAuthed(handlers.ActivateSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestActivateSurveyHandler_RejectsInvalidTransition(t *testing.T) {
+	svc := &fakeSurveySvc{
+		activateFn: func(_ context.Context, _ *models.User, _ string) (*models.Survey, error) {
+			return nil, services.ErrInvalidStatusTransition
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/activate", nil)
+	rr := serveAuthed(handlers.ActivateSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusConflict)
+	}
+}
+
+func TestActivateSurveyHandler_RejectsSurveyWithoutQuestions(t *testing.T) {
+	svc := &fakeSurveySvc{
+		activateFn: func(_ context.Context, _ *models.User, _ string) (*models.Survey, error) {
+			return nil, services.ErrInvalidSurveyConfig
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/activate", nil)
+	rr := serveAuthed(handlers.ActivateSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCloseSurveyHandler_OpenToClosed(t *testing.T) {
+	svc := &fakeSurveySvc{
+		closeFn: func(_ context.Context, _ *models.User, id string) (*models.Survey, error) {
+			return &models.Survey{ID: id, Status: "closed"}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/close", nil)
+	rr := serveAuthed(handlers.CloseSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestReopenSurveyHandler_ClosedToOpen(t *testing.T) {
+	svc := &fakeSurveySvc{
+		reopenFn: func(_ context.Context, _ *models.User, id string) (*models.Survey, error) {
+			return &models.Survey{ID: id, Status: "open"}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/reopen", nil)
+	rr := serveAuthed(handlers.ReopenSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestArchiveSurveyHandler_OK(t *testing.T) {
+	svc := &fakeSurveySvc{
+		archiveFn: func(_ context.Context, _ *models.User, id string) (*models.Survey, error) {
+			return &models.Survey{ID: id, Status: "archived"}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/surveys/"+testSurveyID+"/archive", nil)
+	rr := serveAuthed(handlers.ArchiveSurvey(svc), req, adminUser(), map[string]string{"id": testSurveyID})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 	}
 }

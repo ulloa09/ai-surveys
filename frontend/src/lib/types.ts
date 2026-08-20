@@ -56,6 +56,12 @@ export interface Survey {
 	termination_mode: 'turn_limit' | 'question_coverage' | 'time_estimate' | 'combination';
 	turn_limit: number | null;
 	time_estimate_minutes: number | null;
+	opens_at: string | null;
+	closes_at: string | null;
+	response_cap: number | null;
+	public_token: string;
+	qr_png_url: string | null;
+	qr_svg_url: string | null;
 	created_at: string;
 	updated_at: string;
 }

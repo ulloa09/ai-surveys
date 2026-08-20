@@ -52,6 +52,7 @@
 <nav class="subnav">
 	<a href="/dashboard/surveys/{survey.id}" class="active">Modo &amp; IA</a>
 	<a href="/dashboard/surveys/{survey.id}/questions">Preguntas</a>
+	<a href="/dashboard/surveys/{survey.id}/lifecycle">Ciclo de vida</a>
 	<a href="/admin/surveys/{survey.id}">Configuración básica</a>
 </nav>
 

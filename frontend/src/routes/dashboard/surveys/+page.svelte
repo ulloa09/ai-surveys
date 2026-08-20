@@ -19,6 +19,20 @@
 	<a class="primary" href="/admin/surveys">Nueva encuesta</a>
 </div>
 
+<label class="archived-toggle">
+	<input
+		type="checkbox"
+		checked={data.showArchived}
+		onchange={(e) => {
+			const url = new URL(window.location.href);
+			if (e.currentTarget.checked) url.searchParams.set('archived', 'true');
+			else url.searchParams.delete('archived');
+			window.location.href = url.toString();
+		}}
+	/>
+	Mostrar archivadas
+</label>
+
 {#if data.surveys.length === 0}
 	<EmptyState
 		title="No hay encuestas todavía"
@@ -53,6 +67,16 @@
 		align-items: center;
 		justify-content: space-between;
 		margin-bottom: 1.25rem;
+	}
+
+	.archived-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		font-size: 0.82rem;
+		color: var(--muted);
+		margin-bottom: 1rem;
+		cursor: pointer;
 	}
 
 	h1 {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -33,7 +35,9 @@ func main() {
 	authSvc := services.NewAuthService(pool, cfg.Auth)
 	teamSvc := services.NewTeamService(pool)
 	questionSvc := services.NewQuestionService(pool)
-	surveySvc := services.NewSurveyService(pool, questionSvc)
+	surveySvc := services.NewSurveyService(pool, questionSvc, cfg.FrontendOrigin)
+
+	startScheduler(surveySvc)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -80,6 +84,11 @@ func main() {
 			r.With(appmw.RequireRole("admin")).Delete("/{id}", handlers.DeleteSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin")).Post("/{id}/duplicate", handlers.DuplicateSurvey(surveySvc))
 
+			r.With(appmw.RequireRole("admin")).Post("/{id}/activate", handlers.ActivateSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin")).Post("/{id}/close", handlers.CloseSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin")).Post("/{id}/reopen", handlers.ReopenSurvey(surveySvc))
+			r.With(appmw.RequireSuperAdmin()).Post("/{id}/archive", handlers.ArchiveSurvey(surveySvc))
+
 			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}/questions", handlers.ListQuestions(questionSvc, surveySvc))
 			r.With(appmw.RequireRole("admin")).Post("/{id}/questions", handlers.CreateQuestion(questionSvc, surveySvc))
 			r.With(appmw.RequireRole("admin")).Put("/{id}/questions/order", handlers.ReorderQuestions(questionSvc, surveySvc))
@@ -90,6 +99,33 @@ func main() {
 
 	log.Printf("backend corriendo en :%s\n", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
+}
+
+// startScheduler arranca el job que aplica transiciones automáticas de
+// ciclo de vida (apertura/cierre programados, cierre por tope de respuestas)
+// una vez al arrancar y luego cada minuto, en su propia goroutine.
+func startScheduler(svc *services.SurveyService) {
+	runOnce := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("scheduler: panic recuperado: %v", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := svc.RunScheduledTransitions(ctx); err != nil {
+			log.Printf("scheduler: error aplicando transiciones: %v", err)
+		}
+	}
+
+	go func() {
+		runOnce()
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			runOnce()
+		}
+	}()
 }
 
 func corsMiddleware(origin string) func(http.Handler) http.Handler {
