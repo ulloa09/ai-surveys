@@ -33,6 +33,7 @@ func main() {
 	}
 
 	authSvc := services.NewAuthService(pool, cfg.Auth)
+	userSvc := services.NewUserService(pool)
 	teamSvc := services.NewTeamService(pool)
 	questionSvc := services.NewQuestionService(pool)
 	surveySvc := services.NewSurveyService(pool, questionSvc, cfg.FrontendOrigin)
@@ -52,7 +53,6 @@ func main() {
 
 	// ── Rutas públicas ────────────────────────────────────────────────────
 	r.Get("/api/health", handlers.Health(pool))
-	r.Post("/api/auth/register", handlers.Register(authSvc))
 	r.Post("/api/auth/login", handlers.Login(authSvc, cfg.Auth.AppEnv, cfg.Auth.SessionDurationH*3600))
 	r.Post("/api/auth/logout", handlers.Logout(authSvc))
 
@@ -85,6 +85,21 @@ func main() {
 		r.Use(appmw.Authenticate(authSvc))
 
 		r.Get("/api/admin/me", handlers.Me())
+
+		// Creación de cuentas — solo super_admin (registro público deshabilitado).
+		r.With(appmw.RequireSuperAdmin()).Post("/api/auth/register", handlers.Register(authSvc))
+
+		// Gestión de usuarios — CRUD completo exclusivo de super_admin.
+		r.Route("/api/admin/users", func(r chi.Router) {
+			r.Use(appmw.RequireSuperAdmin())
+			r.Get("/", handlers.ListUsers(userSvc))
+			r.Post("/", handlers.CreateUser(userSvc))
+			r.Get("/{userID}", handlers.GetUser(userSvc))
+			r.Patch("/{userID}", handlers.UpdateUser(userSvc))
+			r.Patch("/{userID}/role", handlers.ChangeUserRole(userSvc))
+			r.Patch("/{userID}/password", handlers.ResetUserPassword(userSvc))
+			r.Delete("/{userID}", handlers.DeleteUser(userSvc))
+		})
 
 		// Settings — solo super_admin
 		r.With(appmw.RequireSuperAdmin()).Get("/api/admin/settings", handlers.GetSettings(settingsSvc))
