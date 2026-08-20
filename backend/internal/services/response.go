@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ulloa09/ai-surveys/backend/internal/ai"
 	"github.com/ulloa09/ai-surveys/backend/internal/models"
 )
 
@@ -381,4 +382,102 @@ func scanResponse(row pgx.Row) (*models.Response, error) {
 		return nil, err
 	}
 	return &response, nil
+}
+
+// GetResponseWithSurvey carga la respuesta y su encuesta en una sola
+// operación. Lo usa el handler de streaming para ensamblar el contexto antes
+// de llamar al proveedor de IA.
+func (s *ResponseService) GetResponseWithSurvey(ctx context.Context, responseID string) (*models.Response, *models.Survey, error) {
+	if !isUUID(responseID) {
+		return nil, nil, ErrResponseSurveyNotFound
+	}
+
+	row := s.db.QueryRow(ctx, `
+		SELECT r.id::text, r.survey_id::text, r.user_id::text, r.fingerprint_hash,
+		       r.status, r.language, r.started_at, r.submitted_at,
+		       r.current_question_index, r.turn_count,
+		       r.registered_name, r.registered_email,
+		       s.id::text, s.title, s.description, s.owner_id::text, s.owner_id::text,
+		       s.team_id::text, s.status, s.mode, s.system_prompt,
+		       s.available_languages, s.default_language,
+		       s.anonymity_level, s.allow_revisit, s.optional_registration,
+		       s.termination_mode, s.turn_limit, s.time_estimate_minutes,
+		       s.opens_at, s.closes_at, s.response_cap, s.public_token::text, s.qr_png_url, s.qr_svg_url,
+		       s.created_at, s.updated_at
+		FROM responses r
+		JOIN surveys s ON s.id = r.survey_id
+		WHERE r.id = $1`, responseID)
+
+	var response models.Response
+	var survey models.Survey
+	err := row.Scan(
+		&response.ID, &response.SurveyID, &response.UserID, &response.FingerprintHash,
+		&response.Status, &response.Language, &response.StartedAt, &response.SubmittedAt,
+		&response.CurrentQuestionIndex, &response.TurnCount,
+		&response.RegisteredName, &response.RegisteredEmail,
+		&survey.ID, &survey.Title, &survey.Description, &survey.OwnerID, &survey.OwnerName,
+		&survey.TeamID, &survey.Status, &survey.Mode, &survey.SystemPrompt,
+		&survey.AvailableLanguages, &survey.DefaultLanguage,
+		&survey.AnonymityLevel, &survey.AllowRevisit, &survey.OptionalRegistration,
+		&survey.TerminationMode, &survey.TurnLimit, &survey.TimeEstimateMinutes,
+		&survey.OpensAt, &survey.ClosesAt, &survey.ResponseCap, &survey.PublicToken, &survey.QRPngURL, &survey.QRSVGURL,
+		&survey.CreatedAt, &survey.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrResponseSurveyNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return &response, &survey, nil
+}
+
+// GetTranscript devuelve todos los turnos de una respuesta en orden
+// cronológico. Se pasa al proveedor de IA como historial de la conversación.
+func (s *ResponseService) GetTranscript(ctx context.Context, responseID string) ([]ai.Turn, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT role, content
+		FROM turns
+		WHERE response_id = $1
+		ORDER BY created_at ASC`, responseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var turns []ai.Turn
+	for rows.Next() {
+		var t ai.Turn
+		if err := rows.Scan(&t.Role, &t.Content); err != nil {
+			return nil, err
+		}
+		turns = append(turns, t)
+	}
+	return turns, rows.Err()
+}
+
+// AppendTurn guarda un turno nuevo en la tabla turns y actualiza el contador
+// turn_count de la respuesta. Lo llama el handler SSE después de cada
+// intercambio usuario/asistente.
+func (s *ResponseService) AppendTurn(ctx context.Context, responseID, role, content string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO turns (response_id, role, content)
+		VALUES ($1, $2, $3)`, responseID, role, content); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE responses
+		SET turn_count = turn_count + 1
+		WHERE id = $1`, responseID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }

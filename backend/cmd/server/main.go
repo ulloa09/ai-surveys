@@ -37,6 +37,10 @@ func main() {
 	questionSvc := services.NewQuestionService(pool)
 	surveySvc := services.NewSurveyService(pool, questionSvc, cfg.FrontendOrigin)
 	responseSvc := services.NewResponseService(pool)
+	settingsSvc, err := services.NewSettingsService(pool, []byte(cfg.EncryptionKey))
+	if err != nil {
+		log.Fatalf("settings service: %v", err)
+	}
 
 	startScheduler(surveySvc)
 
@@ -69,6 +73,17 @@ func main() {
 		r.Use(appmw.Authenticate(authSvc))
 
 		r.Get("/api/admin/me", handlers.Me())
+
+		// Settings — solo super_admin
+		r.With(appmw.RequireSuperAdmin()).Get("/api/admin/settings", handlers.GetSettings(settingsSvc))
+		r.With(appmw.RequireSuperAdmin()).Patch("/api/admin/settings", handlers.UpdateSettings(settingsSvc))
+		r.With(appmw.RequireSuperAdmin()).Post("/api/admin/settings/test", handlers.TestConnection(settingsSvc))
+
+		// SSE streaming (admin)
+		r.Get("/api/responses/{id}/stream", handlers.StreamTurn(settingsSvc, responseSvc))
+
+		// Dev test
+		r.Post("/api/dev/test-ai", handlers.DevTestAI(settingsSvc, cfg.Auth.AppEnv))
 
 		// Teams — reutilizado como concepto de grupo/clase (Fase 3, RBAC).
 		// Crear equipos y ver el listado global quedan en RequireAdminRole /

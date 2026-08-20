@@ -23,6 +23,9 @@ type Config struct {
 	// cambia, los hashes ya guardados dejan de corresponder y los respondientes
 	// que ya contestaron podrían volver a hacerlo.
 	FingerprintSalt string
+	// EncryptionKey cifra las API keys de proveedores de IA en platform_settings
+	// (ver services.SettingsService). Debe medir exactamente 32 bytes (AES-256).
+	EncryptionKey string
 }
 
 // DBConfig tiene los datos de conexión a PostgreSQL.
@@ -74,6 +77,7 @@ func Load() *Config {
 		},
 		FrontendOrigin:  env("FRONTEND_ORIGIN", "http://localhost:5173"),
 		FingerprintSalt: env("FINGERPRINT_SALT", "dev-fingerprint-salt-change-me"),
+		EncryptionKey:   env("ENCRYPTION_KEY", "dev-encryption-key-32-chars-pad!"),
 	}
 }
 
