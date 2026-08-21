@@ -234,3 +234,127 @@ func (p *OpenAIProvider) Probe(ctx context.Context) error {
 	}
 	return nil
 }
+
+// AnalyseAnswers extrae sentimiento y tags de todas las respuestas de un
+// participante en una sola llamada (una llamada por respuesta, no por
+// pregunta — ver AnalysisProvider).
+func (p *OpenAIProvider) AnalyseAnswers(ctx context.Context, req AnswerAnalysisRequest) (AnswerAnalysisResult, error) {
+	var sb strings.Builder
+	sb.WriteString("Analyze the sentiment and topics of each answer below.\n")
+	sb.WriteString("For each answer provide: sentiment_label (positive/neutral/negative), sentiment_score ")
+	sb.WriteString("(0.0-1.0, how strongly that sentiment is expressed), and tags (2-5 short topic phrases; ")
+	sb.WriteString("only meaningful for open-ended answers, empty array otherwise).\n")
+	if req.Language != "" {
+		sb.WriteString(fmt.Sprintf("Write tags in %s.\n", req.Language))
+	}
+	sb.WriteString("Respond ONLY with a JSON object with an 'answers' array: ")
+	sb.WriteString("{\"answers\": [{\"question_id\", \"sentiment_label\", \"sentiment_score\", \"tags\"}]}\n\n")
+	sb.WriteString("Answers:\n")
+	for _, a := range req.Answers {
+		sb.WriteString(fmt.Sprintf("- question_id:%s type:%s question:%s answer:%s\n",
+			a.QuestionID, a.QuestionType, a.QuestionText, a.Value))
+	}
+
+	body := map[string]any{
+		"model": p.model,
+		"messages": []openAIMessage{
+			{Role: "user", Content: sb.String()},
+		},
+		"response_format": map[string]string{"type": "json_object"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.openai.com/v1/chat/completions", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return AnswerAnalysisResult{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := openAIClient.Do(httpReq)
+	if err != nil {
+		return AnswerAnalysisResult{}, fmt.Errorf("openai: answer analysis request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return AnswerAnalysisResult{}, fmt.Errorf("openai: answer analysis error %d: %s", resp.StatusCode, string(b))
+	}
+
+	var apiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return AnswerAnalysisResult{}, fmt.Errorf("openai: decode answer analysis: %w", err)
+	}
+	if len(apiResp.Choices) == 0 {
+		return AnswerAnalysisResult{}, fmt.Errorf("openai: empty answer analysis response")
+	}
+
+	var result struct {
+		Answers []AnalysedAnswer `json:"answers"`
+	}
+	if err := json.Unmarshal([]byte(sanitizeJSONResponse(apiResp.Choices[0].Message.Content)), &result); err != nil {
+		return AnswerAnalysisResult{}, fmt.Errorf("openai: parse answer analysis JSON: %w", err)
+	}
+	return AnswerAnalysisResult{Answers: result.Answers}, nil
+}
+
+// AggregateQuestion resume todas las respuestas a una misma pregunta, agrupa
+// sus temas y marca cuáles son outliers, en una sola llamada (una llamada por
+// pregunta — requisito explícito de #15).
+func (p *OpenAIProvider) AggregateQuestion(ctx context.Context, req QuestionAggregationRequest) (QuestionAggregationResult, error) {
+	body := map[string]any{
+		"model": p.model,
+		"messages": []openAIMessage{
+			{Role: "user", Content: buildAggregationPrompt(req)},
+		},
+		"response_format": map[string]string{"type": "json_object"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.openai.com/v1/chat/completions", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return QuestionAggregationResult{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := openAIClient.Do(httpReq)
+	if err != nil {
+		return QuestionAggregationResult{}, fmt.Errorf("openai: question aggregation request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return QuestionAggregationResult{}, fmt.Errorf("openai: question aggregation error %d: %s", resp.StatusCode, string(b))
+	}
+
+	var apiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return QuestionAggregationResult{}, fmt.Errorf("openai: decode question aggregation: %w", err)
+	}
+	if len(apiResp.Choices) == 0 {
+		return QuestionAggregationResult{}, fmt.Errorf("openai: empty question aggregation response")
+	}
+
+	result, err := parseAggregationResponse(apiResp.Choices[0].Message.Content)
+	if err != nil {
+		return QuestionAggregationResult{}, fmt.Errorf("openai: %w", err)
+	}
+	return result, nil
+}

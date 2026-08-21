@@ -69,10 +69,28 @@ type SurveyService struct {
 	// baseURL es el origen del frontend (FRONTEND_ORIGIN). Se usa para construir
 	// el link público /s/<token> que se codifica en el QR.
 	baseURL string
+	// analysisSvc dispara el Analysis Engine (#15) cuando una encuesta cierra
+	// (Close o el auto-cierre de RunScheduledTransitions). Puede ser nil (p.
+	// ej. en tests que no lo necesitan) — se chequea antes de cada uso.
+	analysisSvc *AnalysisService
 }
 
-func NewSurveyService(db *pgxpool.Pool, questions QuestionCopier, baseURL string) *SurveyService {
-	return &SurveyService{db: db, questions: questions, baseURL: strings.TrimRight(baseURL, "/")}
+type SurveyOption func(*SurveyService)
+
+// WithSurveyAnalysisService conecta el Analysis Engine (#15) al ciclo de
+// vida de la encuesta.
+func WithSurveyAnalysisService(analysisSvc *AnalysisService) SurveyOption {
+	return func(s *SurveyService) {
+		s.analysisSvc = analysisSvc
+	}
+}
+
+func NewSurveyService(db *pgxpool.Pool, questions QuestionCopier, baseURL string, opts ...SurveyOption) *SurveyService {
+	s := &SurveyService{db: db, questions: questions, baseURL: strings.TrimRight(baseURL, "/")}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // PublicURL arma el link público de la encuesta a partir de su token inmutable.
@@ -447,8 +465,44 @@ func (s *SurveyService) Close(ctx context.Context, user *models.User, id string)
 		`UPDATE surveys SET status = 'closed', updated_at = NOW() WHERE id = $1`, id); err != nil {
 		return nil, err
 	}
+	if s.analysisSvc != nil {
+		s.analysisSvc.TriggerSurveyAnalysis(id)
+	}
 	return s.loadByID(ctx, id)
 }
+
+// RetryAnalysis vuelve a encolar el Analysis Engine (#15) para una encuesta
+// que quedó en 'failed' (el job murió a mitad de camino: proveedor de IA
+// caído, JSON inválido, timeout) o 'analysing' (el job se perdió porque el
+// proceso se reinició mientras corría — ver AnalysisService.Run). Es la única
+// forma de destrabar una encuesta sin volver a cerrarla y reabrirla, algo que
+// además no está permitido una vez que ya pasó por 'closed'.
+// AnalyseSurvey es idempotente, así que reintentar sobrescribe cualquier
+// resultado parcial sin duplicar nada.
+func (s *SurveyService) RetryAnalysis(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	survey, err := s.loadAuthorizedForWrite(ctx, user, id)
+	if err != nil {
+		return nil, err
+	}
+	// 'complete' también se puede reintentar: el engine es idempotente por
+	// diseño (#15), y sin esto una encuesta ya analizada quedaba sin forma de
+	// refrescar sus resultados — ni tras cambiar el prompt o el modelo, ni tras
+	// un análisis que terminó pero salió pobre. Volver a correrlo sobrescribe
+	// analysis_results y answers.is_outlier, no duplica nada.
+	if !retriableStatuses[survey.Status] {
+		return nil, ErrInvalidStatusTransition
+	}
+	if s.analysisSvc == nil {
+		return nil, ErrAIProviderUnavailable
+	}
+	s.analysisSvc.TriggerSurveyAnalysis(id)
+	return survey, nil
+}
+
+// retriableStatuses son los estados desde los que se puede re-encolar el
+// Analysis Engine. Una encuesta abierta o en borrador no: todavía no hay un
+// conjunto de respuestas cerrado que agregar.
+var retriableStatuses = map[string]bool{"failed": true, "analysing": true, "complete": true}
 
 // Archive archiva una encuesta (draft/closed → archived). El router restringe
 // este endpoint a super_admin. No se permite archivar una encuesta abierta:
@@ -542,18 +596,55 @@ func (s *SurveyService) RunScheduledTransitions(ctx context.Context) error {
 		}
 	}
 
-	if _, err := s.db.Exec(ctx,
+	// Auto-cerrar las open cuya fecha de cierre ya pasó. RETURNING id para poder
+	// disparar el Analysis Engine (#15) por cada una, igual que Close.
+	closedByTime, err := s.db.Query(ctx,
 		`UPDATE surveys SET status = 'closed', updated_at = NOW()
-		 WHERE status = 'open' AND closes_at IS NOT NULL AND closes_at <= NOW()`); err != nil {
+		 WHERE status = 'open' AND closes_at IS NOT NULL AND closes_at <= NOW()
+		 RETURNING id::text`)
+	if err != nil {
+		return err
+	}
+	var closedIDs []string
+	for closedByTime.Next() {
+		var id string
+		if err := closedByTime.Scan(&id); err != nil {
+			closedByTime.Close()
+			return err
+		}
+		closedIDs = append(closedIDs, id)
+	}
+	closedByTime.Close()
+	if err := closedByTime.Err(); err != nil {
 		return err
 	}
 
 	// Auto-cerrar las encuestas abiertas que alcanzaron su tope de respuestas.
-	if _, err := s.db.Exec(ctx,
+	closedByCap, err := s.db.Query(ctx,
 		`UPDATE surveys s SET status = 'closed', updated_at = NOW()
 		 WHERE s.status = 'open' AND s.response_cap IS NOT NULL
-		   AND (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id) >= s.response_cap`); err != nil {
+		   AND (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id) >= s.response_cap
+		 RETURNING s.id::text`)
+	if err != nil {
 		return err
+	}
+	for closedByCap.Next() {
+		var id string
+		if err := closedByCap.Scan(&id); err != nil {
+			closedByCap.Close()
+			return err
+		}
+		closedIDs = append(closedIDs, id)
+	}
+	closedByCap.Close()
+	if err := closedByCap.Err(); err != nil {
+		return err
+	}
+
+	if s.analysisSvc != nil {
+		for _, id := range closedIDs {
+			s.analysisSvc.TriggerSurveyAnalysis(id)
+		}
 	}
 
 	return nil

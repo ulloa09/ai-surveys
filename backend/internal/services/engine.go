@@ -61,6 +61,10 @@ type EngineService struct {
 	settingsSvc     *SettingsService
 	questionSvc     *QuestionService
 	providerFactory func(providerName, apiKey, model string) (ai.AIProvider, error)
+	// analysisSvc dispara el análisis incremental de sentimiento/tags (#15)
+	// cuando una respuesta se envía. Puede ser nil (p. ej. en tests que no lo
+	// necesitan) — se chequea antes de cada uso.
+	analysisSvc *AnalysisService
 }
 
 type EngineOption func(*EngineService)
@@ -70,6 +74,14 @@ func WithProviderFactory(factory func(providerName, apiKey, model string) (ai.AI
 		if factory != nil {
 			e.providerFactory = factory
 		}
+	}
+}
+
+// WithEngineAnalysisService conecta el Analysis Engine (#15) al envío de
+// respuestas.
+func WithEngineAnalysisService(analysisSvc *AnalysisService) EngineOption {
+	return func(e *EngineService) {
+		e.analysisSvc = analysisSvc
 	}
 }
 
@@ -617,10 +629,12 @@ func (e *EngineService) Submit(ctx context.Context, responseID string) error {
 	if err != nil {
 		return err
 	}
-	// Emite el evento survey.submitted (por ahora solo un log entry) que el
-	// Analysis Engine (#15) consumirá para disparar el análisis incremental de
-	// sentimiento/tags por respuesta.
+	// Emite el evento survey.submitted que dispara el análisis incremental de
+	// sentimiento/tags por respuesta (#15).
 	log.Printf("survey.submitted response_id=%s survey_id=%s", responseID, survey.ID)
+	if e.analysisSvc != nil {
+		e.analysisSvc.TriggerResponseAnalysis(responseID)
+	}
 	return nil
 }
 

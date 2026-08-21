@@ -36,15 +36,17 @@ func main() {
 	userSvc := services.NewUserService(pool)
 	teamSvc := services.NewTeamService(pool)
 	questionSvc := services.NewQuestionService(pool)
-	surveySvc := services.NewSurveyService(pool, questionSvc, cfg.FrontendOrigin)
 	responseSvc := services.NewResponseService(pool)
 	settingsSvc, err := services.NewSettingsService(pool, []byte(cfg.EncryptionKey))
 	if err != nil {
 		log.Fatalf("settings service: %v", err)
 	}
-	engineSvc := services.NewEngineService(pool, settingsSvc, questionSvc)
+	analysisSvc := services.NewAnalysisService(pool, settingsSvc)
+	surveySvc := services.NewSurveyService(pool, questionSvc, cfg.FrontendOrigin, services.WithSurveyAnalysisService(analysisSvc))
+	engineSvc := services.NewEngineService(pool, settingsSvc, questionSvc, services.WithEngineAnalysisService(analysisSvc))
 
 	startScheduler(surveySvc)
+	startAnalysisWorker(analysisSvc)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -152,6 +154,7 @@ func main() {
 			r.With(appmw.RequireRole("admin")).Post("/{id}/close", handlers.CloseSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin")).Post("/{id}/reopen", handlers.ReopenSurvey(surveySvc))
 			r.With(appmw.RequireSuperAdmin()).Post("/{id}/archive", handlers.ArchiveSurvey(surveySvc))
+			r.With(appmw.RequireRole("admin")).Post("/{id}/analysis/retry", handlers.RetrySurveyAnalysis(surveySvc))
 
 			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}/questions", handlers.ListQuestions(questionSvc, surveySvc))
 			r.With(appmw.RequireRole("admin")).Post("/{id}/questions", handlers.CreateQuestion(questionSvc, surveySvc))
@@ -195,6 +198,15 @@ func startScheduler(svc *services.SurveyService) {
 			runOnce()
 		}
 	}()
+}
+
+// startAnalysisWorker arranca el job runner del Analysis Engine (#15) en su
+// propia goroutine: consume la cola interna de AnalysisService.Run hasta que
+// el proceso termina. A diferencia de startScheduler (polling cada minuto),
+// este es un dispatch por canal — SurveyService.Close/RunScheduledTransitions
+// y EngineService.Submit encolan el trabajo apenas ocurre la transición.
+func startAnalysisWorker(svc *services.AnalysisService) {
+	go svc.Run(context.Background())
 }
 
 func corsMiddleware(origin string) func(http.Handler) http.Handler {

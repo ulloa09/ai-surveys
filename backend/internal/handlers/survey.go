@@ -29,6 +29,9 @@ type SurveyServicer interface {
 	Close(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 	Reopen(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 	Archive(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	// RetryAnalysis re-encola el Analysis Engine (#15) para una encuesta
+	// atascada en 'failed' o 'analysing'.
+	RetryAnalysis(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 }
 
 // CreateSurvey maneja POST /api/surveys. El usuario debe ser admin/super_admin
@@ -395,6 +398,13 @@ func ArchiveSurvey(svc SurveyServicer) http.HandlerFunc {
 	return surveyTransitionHandler(svc.Archive)
 }
 
+// RetrySurveyAnalysis maneja POST /api/surveys/{id}/analysis/retry.
+// Vuelve a encolar el Analysis Engine (#15) para una encuesta que quedó en
+// 'failed' o 'analysing' sin avanzar nunca — ver AnalysisService.AnalyseSurvey.
+func RetrySurveyAnalysis(svc SurveyServicer) http.HandlerFunc {
+	return surveyTransitionHandler(svc.RetryAnalysis)
+}
+
 // writeSurveyError traduce los errores tipados del servicio de encuestas al
 // código HTTP correspondiente. Cualquier otro error se trata como 500.
 func writeSurveyError(w http.ResponseWriter, err error) {
@@ -413,6 +423,8 @@ func writeSurveyError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "invalid status transition for this survey"})
 	case errors.Is(err, services.ErrInvalidSurveyConfig):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	case errors.Is(err, services.ErrAIProviderUnavailable):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "ai provider not configured"})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 	}

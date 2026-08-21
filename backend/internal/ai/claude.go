@@ -195,3 +195,86 @@ func (p *ClaudeProvider) Probe(ctx context.Context) error {
 	}
 	return nil
 }
+
+// AnalyseAnswers corre una llamada no-streaming para extraer sentimiento y
+// tags de todas las respuestas de un participante en un solo request (una
+// llamada por respuesta, no por pregunta — ver AnalysisProvider).
+func (p *ClaudeProvider) AnalyseAnswers(ctx context.Context, req AnswerAnalysisRequest) (AnswerAnalysisResult, error) {
+	var sb strings.Builder
+	sb.WriteString("Analyze the sentiment and topics of each answer below.\n")
+	sb.WriteString("For each answer provide: sentiment_label (positive/neutral/negative), sentiment_score ")
+	sb.WriteString("(0.0-1.0, how strongly that sentiment is expressed), and tags (2-5 short topic phrases; ")
+	sb.WriteString("only meaningful for open-ended answers, empty array otherwise).\n")
+	if req.Language != "" {
+		sb.WriteString(fmt.Sprintf("Write tags in %s.\n", req.Language))
+	}
+	sb.WriteString("Respond ONLY with a JSON object: {\"answers\": [{\"question_id\": \"...\", ")
+	sb.WriteString("\"sentiment_label\": \"...\", \"sentiment_score\": 0.0, \"tags\": [...]}]}\n\n")
+	sb.WriteString("Answers:\n")
+	for _, a := range req.Answers {
+		sb.WriteString(fmt.Sprintf("- question_id:%s type:%s question:%s answer:%s\n",
+			a.QuestionID, a.QuestionType, a.QuestionText, a.Value))
+	}
+
+	msg, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(p.model),
+		MaxTokens: 2048,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(sb.String())),
+		},
+	})
+	if err != nil {
+		return AnswerAnalysisResult{}, fmt.Errorf("claude: answer analysis request: %w", err)
+	}
+	if len(msg.Content) == 0 {
+		return AnswerAnalysisResult{}, fmt.Errorf("claude: empty answer analysis response")
+	}
+
+	var parsed struct {
+		Answers []struct {
+			QuestionID     string   `json:"question_id"`
+			SentimentLabel string   `json:"sentiment_label"`
+			SentimentScore float64  `json:"sentiment_score"`
+			Tags           []string `json:"tags"`
+		} `json:"answers"`
+	}
+	if err := json.Unmarshal([]byte(sanitizeJSONResponse(msg.Content[0].Text)), &parsed); err != nil {
+		return AnswerAnalysisResult{}, fmt.Errorf("claude: parse answer analysis JSON: %w", err)
+	}
+
+	answers := make([]AnalysedAnswer, 0, len(parsed.Answers))
+	for _, a := range parsed.Answers {
+		answers = append(answers, AnalysedAnswer{
+			QuestionID:     a.QuestionID,
+			SentimentLabel: a.SentimentLabel,
+			SentimentScore: a.SentimentScore,
+			Tags:           a.Tags,
+		})
+	}
+	return AnswerAnalysisResult{Answers: answers}, nil
+}
+
+// AggregateQuestion corre una llamada no-streaming que resume todas las
+// respuestas a una misma pregunta y marca cuáles son outliers, en un solo
+// request (una llamada por pregunta — requisito explícito de #15).
+func (p *ClaudeProvider) AggregateQuestion(ctx context.Context, req QuestionAggregationRequest) (QuestionAggregationResult, error) {
+	msg, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(p.model),
+		MaxTokens: 1024,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(buildAggregationPrompt(req))),
+		},
+	})
+	if err != nil {
+		return QuestionAggregationResult{}, fmt.Errorf("claude: question aggregation request: %w", err)
+	}
+	if len(msg.Content) == 0 {
+		return QuestionAggregationResult{}, fmt.Errorf("claude: empty question aggregation response")
+	}
+
+	result, err := parseAggregationResponse(msg.Content[0].Text)
+	if err != nil {
+		return QuestionAggregationResult{}, fmt.Errorf("claude: %w", err)
+	}
+	return result, nil
+}

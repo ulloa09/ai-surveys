@@ -23,3 +23,17 @@ func NewProvider(providerName, apiKey, model string) (AIProvider, error) {
 type Prober interface {
 	Probe(ctx context.Context) error
 }
+
+// NewAnalysisProvider crea el proveedor correcto para el Analysis Engine
+// (#15). Usa los mismos constructores que NewProvider: ClaudeProvider y
+// OpenAIProvider implementan tanto AIProvider como AnalysisProvider.
+func NewAnalysisProvider(providerName, apiKey, model string) (AnalysisProvider, error) {
+	switch providerName {
+	case "claude", "":
+		return NewClaudeProvider(apiKey, model), nil
+	case "openai":
+		return NewOpenAIProvider(apiKey, model), nil
+	default:
+		return nil, fmt.Errorf("unknown ai provider: %q", providerName)
+	}
+}

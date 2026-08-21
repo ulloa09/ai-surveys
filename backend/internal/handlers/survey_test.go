@@ -30,6 +30,7 @@ type fakeSurveySvc struct {
 	closeFn            func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 	reopenFn           func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 	archiveFn          func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
+	retryAnalysisFn    func(ctx context.Context, user *models.User, id string) (*models.Survey, error)
 }
 
 func (f *fakeSurveySvc) Create(ctx context.Context, user *models.User, in services.CreateSurveyInput) (*models.Survey, error) {
@@ -67,6 +68,9 @@ func (f *fakeSurveySvc) Reopen(ctx context.Context, user *models.User, id string
 }
 func (f *fakeSurveySvc) Archive(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
 	return f.archiveFn(ctx, user, id)
+}
+func (f *fakeSurveySvc) RetryAnalysis(ctx context.Context, user *models.User, id string) (*models.Survey, error) {
+	return f.retryAnalysisFn(ctx, user, id)
 }
 
 // ensure fakeSurveySvc satisfies handlers.SurveyServicer at compile time
