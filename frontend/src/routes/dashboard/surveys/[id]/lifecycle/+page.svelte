@@ -1,12 +1,23 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { STATUS_LABELS } from '$lib/types';
+	import { STATUS_LABELS, hasAnalysis } from '$lib/types';
+	import { getPermissions } from '$lib/permissions';
 	import type { ActionData, PageData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const survey = $derived(data.survey);
+	const stats = $derived(data.stats);
+	const perms = $derived(getPermissions(data.user?.role ?? 'alumno'));
+	const canSeeAnalysis = $derived(perms.canViewResults && hasAnalysis(survey.status));
 	const publicPath = $derived(`/s/${survey.public_token}`);
+
+	function formatDuration(seconds: number | null | undefined): string {
+		if (seconds === null || seconds === undefined) return '—';
+		const mins = Math.floor(seconds / 60);
+		const secs = Math.round(seconds % 60);
+		return mins > 0 ? `${mins} min ${secs} s` : `${secs} s`;
+	}
 
 	function toLocalInputValue(iso: string | null): string {
 		if (!iso) return '';
@@ -42,6 +53,9 @@
 	<a href="/dashboard/surveys/{survey.id}/questions">Preguntas</a>
 	<a href="/dashboard/surveys/{survey.id}/lifecycle" class="active">Ciclo de vida</a>
 	<a href="/admin/surveys/{survey.id}">Configuración básica</a>
+	{#if perms.canViewResults}
+		<a href="/dashboard/surveys/{survey.id}/analysis">Resultados</a>
+	{/if}
 </nav>
 
 {#if form?.lifecycleError}
@@ -85,8 +99,89 @@
 				<button class="danger" type="submit">Archivar</button>
 			</form>
 		{/if}
+		{#if survey.status === 'failed' || survey.status === 'complete'}
+			<form
+				method="POST"
+				action="?/retry"
+				use:enhance
+				onsubmit={(e) => {
+					const msg =
+						survey.status === 'complete'
+							? '¿Volver a analizar esta encuesta? Se sobrescribirán los resultados actuales.'
+							: '¿Reintentar el análisis? El intento anterior no pudo completarse.';
+					if (!confirm(msg)) e.preventDefault();
+				}}
+			>
+				<button class="primary" type="submit">
+					{survey.status === 'complete' ? 'Volver a analizar' : 'Reintentar análisis'}
+				</button>
+			</form>
+		{/if}
 	</div>
 </div>
+
+<!-- Resultados (#16) -->
+{#if perms.canViewResults && stats}
+	<div class="card">
+		<h2 class="card-title">
+			Resultados
+			<a href="/dashboard/surveys/{survey.id}/responses" class="link-action">Ver respuestas →</a>
+			{#if canSeeAnalysis}
+				<a href="/dashboard/surveys/{survey.id}/analysis" class="link-action">Ver análisis →</a>
+			{/if}
+		</h2>
+		<div class="stats-row">
+			<div class="ms-item">
+				<span class="ms-label">Respuestas</span>
+				<span class="stat-value">{stats.response_count}</span>
+			</div>
+			<div class="ms-item">
+				<span class="ms-label">Completadas</span>
+				<span class="stat-value">{stats.completed_count}</span>
+			</div>
+			<div class="ms-item">
+				<span class="ms-label">Tasa de completado</span>
+				<span class="stat-value">{Math.round(stats.completion_rate * 100)}%</span>
+			</div>
+			<div class="ms-item">
+				<span class="ms-label">Duración promedio</span>
+				<span class="stat-value stat-value--sm">{formatDuration(stats.avg_duration_seconds)}</span>
+			</div>
+		</div>
+
+		{#if survey.anonymity_level === 'full'}
+			<p class="hint-inline stats-hint">
+				En una encuesta completamente anónima, «Tasa de completado» mide sesiones
+				(abre/no abre), no personas: cada visita crea una respuesta nueva, así que
+				reintentos y abandonos la inflan. Declara un tope de respuestas arriba para
+				ver cobertura real.
+			</p>
+		{/if}
+
+		{#if stats.expected_responses !== null}
+			<div class="coverage-row">
+				<div class="ms-item">
+					<span class="ms-label">Cobertura esperada</span>
+					<span class="stat-value">{Math.round((stats.coverage_rate ?? 0) * 100)}%</span>
+				</div>
+				<div class="ms-item">
+					<span class="ms-label">Faltan por responder</span>
+					<span class="stat-value" class:stat-value--warn={(stats.missing_responses ?? 0) > 0}>
+						{stats.missing_responses}
+					</span>
+				</div>
+				<div class="ms-item">
+					<span class="ms-label">Esperadas en total</span>
+					<span class="stat-value stat-value--sm">{stats.expected_responses}</span>
+				</div>
+			</div>
+		{/if}
+
+		{#if !canSeeAnalysis}
+			<p class="hint-inline stats-hint">El análisis por pregunta se genera al finalizar la encuesta.</p>
+		{/if}
+	</div>
+{/if}
 
 {#if form?.scheduleError}
 	<p class="banner error" role="alert">{form.scheduleError}</p>
@@ -231,12 +326,91 @@
 		margin: 0 0 0.9rem;
 	}
 
+	.card-title {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.link-action {
+		font-size: 0.8rem;
+		color: var(--blue-600);
+		text-decoration: none;
+		font-weight: 600;
+		margin-left: auto;
+	}
+	.link-action:hover {
+		color: var(--blue-800);
+		text-decoration: underline;
+	}
+	.link-action + .link-action {
+		margin-left: 0;
+	}
+
 	.lifecycle-actions {
 		display: flex;
 		gap: 0.6rem;
+		flex-wrap: wrap;
 	}
 	.lifecycle-actions form {
 		display: inline;
+	}
+
+	.stats-row {
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		gap: 0.75rem 1.5rem;
+	}
+
+	.coverage-row {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 0.75rem 1.5rem;
+		margin-top: 1.25rem;
+		padding-top: 1.25rem;
+		border-top: 1.5px solid var(--blue-50);
+	}
+
+	.ms-item {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+
+	.ms-label {
+		font-size: 0.72rem;
+		color: var(--muted);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.stat-value {
+		font-size: 1.4rem;
+		font-weight: 700;
+		color: var(--text);
+		letter-spacing: -0.02em;
+		line-height: 1.2;
+	}
+	.stat-value--sm {
+		font-size: 1rem;
+		font-weight: 600;
+	}
+	.stat-value--warn {
+		color: #b45309;
+	}
+
+	.stats-hint {
+		padding-top: 1rem;
+	}
+
+	@media (max-width: 700px) {
+		.stats-row {
+			grid-template-columns: repeat(2, 1fr);
+		}
+		.coverage-row {
+			grid-template-columns: repeat(2, 1fr);
+		}
 	}
 
 	label {

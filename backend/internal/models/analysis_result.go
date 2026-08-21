@@ -37,3 +37,61 @@ type TopicCluster struct {
 	Tag   string `json:"tag"`
 	Count int    `json:"count"`
 }
+
+// OptionCount es la cantidad de respuestas que eligieron un valor concreto en
+// una pregunta estructurada (linear_scale, single_choice, true_false...).
+// Value es el valor guardado en answers.raw_value; Label es cómo se le
+// presentó al participante (ver DisplayAnswer) — el dashboard muestra Label,
+// no el valor interno.
+type OptionCount struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+// SurveyAnalysis es la vista de lectura que consume el dashboard (#16): las
+// estadísticas de toda la encuesta más una sección por pregunta, en el orden
+// en que se le presentan al participante.
+//
+// AnalysedAt es el análisis más reciente entre todas las preguntas, o nil si
+// el job todavía no escribió ningún resultado (status = 'analysing').
+type SurveyAnalysis struct {
+	SurveyID   string             `json:"survey_id"`
+	Status     string             `json:"status"`
+	AnalysedAt *time.Time         `json:"analysed_at"`
+	Stats      SurveyStats        `json:"stats"`
+	Questions  []QuestionAnalysis `json:"questions"`
+}
+
+// QuestionAnalysis es la sección de una pregunta en la vista de análisis:
+// el resultado agregado del Analysis Engine (resumen, sentimiento, temas)
+// más los datos que el dashboard necesita para contextualizarlo.
+//
+// Una pregunta sin fila en analysis_results (el job aún no llegó a ella)
+// aparece igual, con AnalysedAt nil y los agregados en cero — la vista es
+// legible mientras la encuesta está en 'analysing'.
+// TopicClusters/Outliers solo se llenan en preguntas abiertas, y
+// AnswerDistribution solo en las estructuradas — son los dos agregados
+// equivalentes, y el dashboard muestra el que corresponda al tipo.
+type QuestionAnalysis struct {
+	QuestionID            string                `json:"question_id"`
+	Text                  string                `json:"text"`
+	Type                  string                `json:"type"`
+	OrderIndex            int                   `json:"order_index"`
+	AnswerCount           int                   `json:"answer_count"`
+	SummaryText           string                `json:"summary_text"`
+	SentimentDistribution SentimentDistribution `json:"sentiment_distribution"`
+	TopicClusters         []TopicCluster        `json:"topic_clusters"`
+	AnswerDistribution    []OptionCount         `json:"answer_distribution"`
+	Outliers              []OutlierAnswer       `json:"outliers"`
+	AnalysedAt            *time.Time            `json:"analysed_at"`
+}
+
+// OutlierAnswer es una respuesta que el proveedor marcó como atípica para su
+// pregunta (answers.is_outlier). El dashboard las lista aparte de los
+// agregados, con su texto original.
+type OutlierAnswer struct {
+	ResponseID     string  `json:"response_id"`
+	RawValue       string  `json:"raw_value"`
+	SentimentLabel *string `json:"sentiment_label"`
+}

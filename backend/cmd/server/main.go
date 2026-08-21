@@ -145,6 +145,15 @@ func main() {
 		r.Route("/api/surveys", func(r chi.Router) {
 			r.With(appmw.RequireRole("admin")).Post("/", handlers.CreateSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin", "profesor")).Get("/", handlers.ListSurveys(surveySvc))
+
+			// Dashboard de resultados (#16). /stats va antes que /{id} por
+			// legibilidad — chi ya prioriza las rutas estáticas sobre las
+			// paramétricas, así que "stats" nunca se interpreta como un id.
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/stats", handlers.ListSurveyStats(surveySvc, analysisSvc))
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}/stats", handlers.GetSurveyStats(surveySvc, analysisSvc))
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}/analysis", handlers.GetSurveyAnalysis(surveySvc, analysisSvc))
+			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}/responses", handlers.GetSurveyResponses(surveySvc, analysisSvc))
+
 			r.With(appmw.RequireRole("admin", "profesor")).Get("/{id}", handlers.GetSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin")).Patch("/{id}", handlers.UpdateSurvey(surveySvc))
 			r.With(appmw.RequireRole("admin")).Delete("/{id}", handlers.DeleteSurvey(surveySvc))

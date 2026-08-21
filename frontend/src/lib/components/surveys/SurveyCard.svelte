@@ -25,11 +25,21 @@
   }
 
   const statusClass: Record<string, string> = {
-    draft:    'status-draft',
-    open:     'status-open',
-    closed:   'status-closed',
-    archived: 'status-archived'
+    draft:     'status-draft',
+    open:      'status-open',
+    closed:    'status-closed',
+    analysing: 'status-analysing',
+    complete:  'status-complete',
+    failed:    'status-failed',
+    archived:  'status-archived'
   };
+
+  // Una encuesta en draft nunca tuvo respuestas: mostrar "0 respuestas, 0% de
+  // completado" sería ruido, así que la fila de stats solo aparece cuando hay
+  // al menos una respuesta.
+  const stats = $derived(survey.stats);
+  const showStats = $derived((stats?.response_count ?? 0) > 0);
+  const completionPct = $derived(Math.round((stats?.completion_rate ?? 0) * 100));
 </script>
 
 <div class="card" class:card--open={survey.status === 'open'}>
@@ -60,6 +70,19 @@
   {#if survey.team_name}
     <div class="team-badges">
       <span class="team-badge">{survey.team_name}</span>
+    </div>
+  {/if}
+
+  {#if showStats && stats}
+    <div class="card-stats">
+      <span class="stat">
+        <strong>{stats.response_count}</strong>
+        {stats.response_count === 1 ? 'respuesta' : 'respuestas'}
+      </span>
+      <span class="stat">
+        <strong>{completionPct}%</strong>
+        completado
+      </span>
     </div>
   {/if}
 
@@ -135,7 +158,27 @@
   .status-draft     { background: var(--blue-50);      color: var(--muted);     border: 1px solid var(--border); }
   .status-open      { background: var(--success-lt);   color: var(--success);   border: 1px solid var(--success); }
   .status-closed    { background: var(--warning-lt);   color: var(--warning);   border: 1px solid var(--warning); }
+  .status-analysing { background: var(--blue-50);      color: var(--blue-600);  border: 1px solid var(--blue-400); }
+  .status-complete  { background: var(--blue-100);     color: var(--blue-900);  border: 1px solid var(--blue-900); }
+  .status-failed    { background: var(--danger-lt);    color: var(--danger);    border: 1px solid var(--danger); }
   .status-archived  { background: #f1f2f4;             color: var(--muted);     border: 1px solid var(--border); }
+
+  /* ── Stats (#16) ─────────────────────────────────────────────────── */
+  .card-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1rem;
+  }
+
+  .card-stats .stat {
+    font-size: 0.775rem;
+    color: var(--muted);
+  }
+
+  .card-stats strong {
+    color: var(--text);
+    font-weight: 700;
+  }
 
   .card-title {
     font-family: var(--font-display);

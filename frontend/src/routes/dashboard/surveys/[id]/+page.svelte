@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { SURVEY_MODES, TERMINATION_MODES } from '$lib/types';
+	import { getPermissions } from '$lib/permissions';
 	import type { ActionData, PageData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const survey = $derived(data.survey);
+	const perms = $derived(getPermissions(data.user?.role ?? 'alumno'));
 
 	let mode = $state(survey.mode);
 	let systemPrompt = $state(survey.system_prompt ?? '');
@@ -54,6 +56,9 @@
 	<a href="/dashboard/surveys/{survey.id}/questions">Preguntas</a>
 	<a href="/dashboard/surveys/{survey.id}/lifecycle">Ciclo de vida</a>
 	<a href="/admin/surveys/{survey.id}">Configuración básica</a>
+	{#if perms.canViewResults}
+		<a href="/dashboard/surveys/{survey.id}/analysis">Resultados</a>
+	{/if}
 </nav>
 
 {#if form?.error}
